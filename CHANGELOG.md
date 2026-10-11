@@ -7,10 +7,12 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- `create` `mode=fast` renders a first HTML page from Markdown (`::: ` blocks) in the chosen style; `mode=full` stays the default (`AM_BUILD_MODE`).
 - `publish` stores a finished HTML or Markdown page without a model call, through the same safety checks, renderer, and version, share, and preview path as a build.
 
 ### Fixed
 
+- Fast layout rendering runs in the killable child with the render timeout and output cap. Bracket runs stay linear, colspan stops at 12, and a table wider than 24 columns or 5,000 cells is clipped. Plain Markdown gains a hero or verdict band, a stat strip, status badges, and a single-line total row on a phone. `callout`, `tip`, and `info` are note aliases. A ` ```html ` fence stays code.
 - Share, preview, and download responses set CSP `sandbox allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation` (with `script-src 'none'`) so a left click on an external link opens a new tab.
 - Reply parsing keeps marker lines that belong to the page, keeps a complete file that omits `===END===`, reads a summary that follows the file, and refuses a file with no visible text or with page content left after the end marker.
 - OpenAI secret checks flag classic `sk-` keys and hyphenated `sk-proj-`, `sk-svcacct-`, and `sk-admin-` keys that contain a digit, and still ignore hyphenated prose such as `sk-learn` and `sk-your-openai-api-key-goes-here`.
