@@ -9,6 +9,7 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from html.parser import HTMLParser
 from typing import Any
 
 import httpx
@@ -346,6 +347,109 @@ def _assumptions_from_section(raw: str) -> list[str]:
     return [a for a in assumptions if a.lower() not in ("none", "(none)")]
 
 
+def _section_name(match: re.Match[str]) -> str:
+    token = match.group(1)
+    return "FILE" if token.startswith("FILE") else token
+
+
+class _VisibleHTML(HTMLParser):
+    """Collect text a reader (or screen reader) gets. Markup such as ``<ASL>`` contributes nothing."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.parts.extend(v for k, v in attrs if k in ("alt", "aria-label", "title") and v)
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+
+def _has_visible_text(body: str, fmt: str) -> bool:
+    if fmt.lower() != "html":
+        return bool(body.strip())
+    parser = _VisibleHTML()
+    parser.feed(body)
+    parser.close()
+    return bool("".join(parser.parts).strip())
+
+
+def _guard_primary_file(reply: str, body: str, fmt: str) -> None:
+    """Reject an empty file so the retry path can run instead of publishing."""
+    _ = reply
+    if not _has_visible_text(body, fmt):
+        raise BuildError("builder output has no visible text")
+
+
+# Text after the file's END that is not a SUMMARY/ASSUMPTIONS section. More than this (and more than a quarter
+# of the file) means page content landed outside the file.
+_MAX_TRAILING_CHARS = 200
+_POSTAMBLE = ("SUMMARY", "ASSUMPTIONS")
+_FENCE_LINE_RE = re.compile(r"^[ \t]*```", re.M)
+
+
+def _unwrap_file_fence(body: str) -> str:
+    fence = re.match(r"^```[a-zA-Z0-9]*\n(.*)\n```\s*$", body, re.S)
+    return fence.group(1) if fence else body
+
+
+def _choose_end(text: str, file_mark: re.Match[str], ends: list[re.Match[str]], kind: str) -> re.Match[str] | None:
+    """Pick the END that closes the file. Marker lines inside the page are content.
+
+    HTML: the first END after the document's last ``</html>``. Otherwise the first END that is outside a code fence
+    and is followed only by the end of the reply or a SUMMARY/ASSUMPTIONS/FILE section; else the final END.
+    """
+    if not ends:
+        return None
+    closes = [m for m in _HTML_CLOSE_RE.finditer(text, file_mark.end())]
+    if kind == "html" and closes:
+        last_close = closes[-1].end()
+        return next((e for e in ends if e.start() >= last_close), None)
+    for e in ends:
+        inside = text[file_mark.end() : e.start()]
+        if len(_FENCE_LINE_RE.findall(inside)) % 2:
+            continue
+        rest = text[e.end() :].lstrip("\n")
+        nxt = SECTION_RE.match(rest)
+        if not rest.strip() or (nxt is not None and _section_name(nxt) in (*_POSTAMBLE, "FILE")):
+            return e
+    return ends[-1]
+
+
+def _parse_file_reply(
+    text: str, marks: list[re.Match[str]], file_mark: re.Match[str], kind: str
+) -> tuple[list[str], str, str]:
+    """Take the sections before the first FILE marker, the file through its END, and SUMMARY/ASSUMPTIONS after it."""
+    ends = [m for m in marks if m.group(1) == "END" and m.start() >= file_mark.end()]
+    end_mark = _choose_end(text, file_mark, ends, kind)
+    sections: dict[str, str] = {}
+    preamble = [mark for mark in marks if mark.start() < file_mark.start()]
+    bounds = [*preamble, file_mark]
+    for i, mark in enumerate(bounds[:-1]):
+        sections[_section_name(mark)] = text[mark.end() : bounds[i + 1].start()].strip("\n")
+    if end_mark is None:
+        body = _unwrap_file_fence(text[file_mark.end() :].strip("\n"))
+        if kind == "html" and _html_document(body) is None:
+            raise BuildError("builder output truncated: missing ===END===")
+        log.warning("builder output has no ===END===; using the complete %s file", kind or "text")
+        return _assumptions_from_section(sections.get("ASSUMPTIONS", "")), sections.get("SUMMARY", "").strip(), body
+    body = _unwrap_file_fence(text[file_mark.end() : end_mark.start()].strip("\n"))
+    after = [m for m in marks if m.start() >= end_mark.end()]
+    trailing = [text[end_mark.end() : after[0].start() if after else len(text)]]
+    for i, mark in enumerate(after):
+        chunk = text[mark.end() : after[i + 1].start() if i + 1 < len(after) else len(text)].strip("\n")
+        name = _section_name(mark)
+        if name in _POSTAMBLE and name not in sections:
+            sections[name] = chunk
+        else:
+            trailing.append(chunk)
+    extra = len("".join(trailing).strip())
+    if extra > _MAX_TRAILING_CHARS and extra * 4 > len(body.strip()):
+        raise BuildError("builder output truncated: page content after ===END===")
+    return _assumptions_from_section(sections.get("ASSUMPTIONS", "")), sections.get("SUMMARY", "").strip(), body
+
+
 def parse_output(text: str, fmt: str | None = None) -> tuple[list[str], str, str]:
     text = text.strip()
     if text.startswith("```") and "===ASSUMPTIONS===" in text:
@@ -353,6 +457,9 @@ def parse_output(text: str, fmt: str | None = None) -> tuple[list[str], str, str
         text = text.rsplit("```", 1)[0]
     marks = list(SECTION_RE.finditer(text))
     kind = (fmt or "").lower().strip()
+    file_mark = next((mark for mark in marks if _section_name(mark) == "FILE"), None)
+    if file_mark is not None:
+        return _parse_file_reply(text, marks, file_mark, kind)
     if not marks:
         recovered = _recover_single_file(text, kind) if kind in _SINGLE_FILE_FMTS else None
         if recovered is not None:
@@ -361,32 +468,24 @@ def parse_output(text: str, fmt: str | None = None) -> tuple[list[str], str, str
         raise BuildError("builder output missing section markers")
     sections: dict[str, str] = {}
     for i, m in enumerate(marks):
-        name = "FILE" if m.group(1).startswith("FILE") else m.group(1)
+        name = _section_name(m)
         end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
         sections[name] = text[m.end() : end].strip("\n")
-    if "FILE" not in sections:
-        if kind in _SINGLE_FILE_FMTS:
-            summary_mark = next((m for m in marks if m.group(1) == "SUMMARY"), None)
-            if summary_mark is not None:
-                end_mark = next((m for m in marks if m.group(1) == "END" and m.start() > summary_mark.end()), None)
-                after = text[summary_mark.end() : end_mark.start() if end_mark else None]
-                recovered = _recover_single_file(after, kind)
-                if recovered is not None:
-                    log.warning("builder output has no FILE section; recovered single-file %s document", kind)
-                    return _assumptions_from_section(sections.get("ASSUMPTIONS", "")), recovered[0], recovered[1]
-            else:
-                recovered = _recover_single_file(text, kind)
-                if recovered is not None:
-                    log.warning("builder output has no FILE section; recovered single-file %s document", kind)
-                    return _assumptions_from_section(sections.get("ASSUMPTIONS", "")), "", recovered[1]
-        raise BuildError("builder output has no FILE section")
-    body = sections["FILE"]
-    fence = re.match(r"^```[a-zA-Z0-9]*\n(.*)\n```\s*$", body, re.S)
-    if fence:
-        body = fence.group(1)
-    assumptions = [a.lstrip("-* ").strip() for a in sections.get("ASSUMPTIONS", "").splitlines() if a.strip()]
-    assumptions = [a for a in assumptions if a.lower() not in ("none", "(none)")]
-    return assumptions, sections.get("SUMMARY", "").strip(), body
+    if kind in _SINGLE_FILE_FMTS:
+        summary_mark = next((m for m in marks if m.group(1) == "SUMMARY"), None)
+        if summary_mark is not None:
+            end_mark = next((m for m in marks if m.group(1) == "END" and m.start() > summary_mark.end()), None)
+            after = text[summary_mark.end() : end_mark.start() if end_mark else None]
+            recovered = _recover_single_file(after, kind)
+            if recovered is not None:
+                log.warning("builder output has no FILE section; recovered single-file %s document", kind)
+                return _assumptions_from_section(sections.get("ASSUMPTIONS", "")), recovered[0], recovered[1]
+        else:
+            recovered = _recover_single_file(text, kind)
+            if recovered is not None:
+                log.warning("builder output has no FILE section; recovered single-file %s document", kind)
+                return _assumptions_from_section(sections.get("ASSUMPTIONS", "")), "", recovered[1]
+    raise BuildError("builder output has no FILE section")
 
 
 def sanitize_html(body: str) -> str:
@@ -609,6 +708,7 @@ async def _finish_text(
     """Parse one complete reply, then run the same checks as a published page."""
     try:
         assumptions, summary, body = parse_output(text, fmt=fmt)
+        _guard_primary_file(text, body, fmt)
     except BuildError as e:
         notes.append(f"{attempt_label}: {e}")
         return _Finish(problems=[str(e)])
