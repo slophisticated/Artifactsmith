@@ -30,7 +30,7 @@ one or two sentences
 """
 
 # Outside SYNTAX_RULES so the 400-token cap still holds. Concrete so the model uses the blocks.
-_EXAMPLE = """Example (use the user's facts, not these numbers):
+_EXAMPLE = """Example (use the user's facts, not these numbers). When 3 or more rows share one amount, chart that column. Skip years, IDs, ranks, and mixed facts.
 
 # North rebate, Q3
 
@@ -50,11 +50,17 @@ Billed | $103,061
 :::
 ::::
 
-| Member | Status | Rebate |
+| Month | Status | Billed |
 |---|---|---|
-| North shop | [Confirmed]{.green} | $1,705 |
-| South shop | [Open]{.amber} | $810 |
-| East shop | [Rejected]{.red} | $0 |
+| July | [Confirmed]{.green} | $38,185 |
+| August | [Open]{.amber} | $28,935 |
+| September | [Rejected]{.red} | $35,941 |
+
+```chart bar unit=$
+July: 38185
+August: 28935
+September: 35941
+```
 """
 
 _HEAD = """You are the builder for an artifact service. You turn a user's request into one Markdown page. The server renders it as styled HTML.

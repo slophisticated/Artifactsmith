@@ -51,6 +51,10 @@ def test_syntax_rules_stay_short():
     assert "::: stat" in house
     assert "[Confirmed]{.green}" in house
     assert "::: callout" in house
+    assert "```chart bar" in house
+    assert "chart that column" in house
+    assert "Skip years, IDs, ranks, and mixed facts" in house
+    assert "July: 38185" in house
     # The example sits outside SYNTAX_RULES. The whole fast prompt stays no
     # longer than the full HTML prompt, so a large source does not pay extra
     # prefill. effort=low is attached only for o1/o3/o4/gpt-5, with no probe.
@@ -331,6 +335,330 @@ def test_header_shares_the_content_column():
         assert "margin:-1.25rem" not in css
         assert ".asl-title,main{max-width:72rem" in css
         assert len(css.encode()) < 8192
+
+
+def test_styles_design_plain_markdown_themselves():
+    source = """# Rebate watch
+
+**Hold the payout.** The rebate below is owed on paid invoices only.
+
+- **Rebate owed:** $15,459
+- **Invoices:** 136
+
+## Risks
+- High: the payout calendar slips a week
+- Watch: one invoice is still open
+- Low: the tax line is estimated
+
+```py
+print(1)
+```
+
+## The record
+The first paragraph of this section is long enough to sit beside another one on a desktop page, and it stays real prose rather than a short label.
+
+The second paragraph keeps the line length comfortable and gives the section two columns.
+"""
+    bold, notes = render_layout(source, style="bold", title="Rebate")
+    assert notes == []
+    body = bold.split("<body>", 1)[1]
+    start = body.index('class="asl-hero-band"')
+    risks = body.index("asl-risks")
+    assert start < body.index("Hold the payout.") < risks
+    assert start < body.index("Rebate owed") < risks
+    assert "asl-risks" in bold
+    assert "tone-red" in bold and "tone-amber" in bold and "tone-green" in bold
+    assert 'class="asl-code panel"' in bold
+    assert 'class="dots"' in bold
+    doc = sanitize_html_document(bold)
+    assert "asl-hero-band" in doc and "asl-risks" in doc and "<script" not in doc.lower()
+
+    editorial, notes = render_layout(source, style="editorial", title="Rebate")
+    assert notes == []
+    body = editorial.split("<body>", 1)[1]
+    hero = body.split('class="asl-hero"', 1)[1].split("</div>", 1)[0]
+    assert 'class="drop"' not in hero
+    assert '<p class="drop">' in body
+    assert 'class="cap"' not in body
+    quote = body.split("asl-quote pull", 1)[1].split("</blockquote>", 1)[0]
+    assert "real prose rather than a short label" in quote
+    assert "rebate below is owed" not in quote
+    assert "Hold the payout." not in quote
+    assert 'class="sec"' in editorial
+    assert "01" in editorial and "02" in editorial
+    assert 'class="cols-2"' in editorial
+    sheet = editorial.split("<style>", 1)[1].split("</style>", 1)[0]
+    assert sheet.count("float:") == 1
+    assert "p.drop::first-letter" in sheet and "float:left" in sheet
+    saved = sanitize_html_document(editorial)
+    assert saved.replace(" ", "").count("float:") == 1
+    assert "first-letter" in saved
+
+    house, _notes = render_layout(source, style="house", title="Rebate")
+    assert "asl-hero-band" not in house
+    assert "asl-risks" not in house
+    assert 'class="sec"' not in house
+
+    playful, _notes = render_layout(source, style="playful", title="Rebate")
+    assert "asl-hero sticker" in playful
+    assert "sticker" in playful.split("<section", 1)[1]
+
+    terminal, _notes = render_layout(source, style="terminal", title="Rebate")
+    assert 'class="prompt"' in terminal
+    assert "asl-list log" in terminal
+
+    swiss, _notes = render_layout(source, style="swiss", title="Rebate")
+    assert "asl-hero swiss" in swiss
+    assert 'class="idx"' in swiss
+    for style in STYLES:
+        assert len(stylesheet(style).encode()) < 8192
+
+
+def test_editorial_drop_cap_floats_only_the_first_letter():
+    source = """# Rebate
+
+::: note
+For July the verdict sits in this callout and must not take a drop cap on the letter F.
+:::
+
+The body opens with a long line and a **bold rebate** phrase that stays inside the same paragraph so the letter floats beside the words.
+"""
+    html, notes = render_layout(source, style="editorial", title="Rebate")
+    assert notes == []
+    body = html.split("<body>", 1)[1]
+    callout = body.split("</aside>", 1)[0]
+    assert 'class="drop"' not in callout
+    para = body.split('<p class="drop">', 1)[1].split("</p>", 1)[0]
+    assert "<strong>bold rebate</strong>" in para
+    assert "cap" not in para
+    sheet = html.split("<style>", 1)[1].split("</style>", 1)[0]
+    assert sheet.count("float:") == 1
+    assert "display:flow-root" in sheet
+    assert "display:grid" not in sheet.split("p.drop{", 1)[1].split("}", 1)[0]
+    doc = sanitize_html_document(html)
+    compact = doc.replace(" ", "")
+    assert compact.count("float:") == 1
+    assert "display:flow-root" in compact
+
+    short = """# Rebate
+
+## Facts
+Account value $62,832. Available funds (not cash) $30,193.
+
+## Notes
+Prices as of 2:44 PM ET.
+
+## Later
+The third section holds a long prose paragraph that must not take a drop cap once the opening sections had none at all, and the sentence keeps going so length alone would have qualified it.
+"""
+    html, notes = render_layout(short, style="editorial", title="Rebate")
+    assert notes == []
+    assert '<p class="drop">' not in html.split("<body>", 1)[1]
+
+    labeled = """# Rebate
+
+## Facts
+Source: transcript dated 2026-10-09 and the rest of this note is long enough that length alone would qualify it for a drop cap on the page.
+"""
+    html, notes = render_layout(labeled, style="editorial", title="Rebate")
+    assert notes == []
+    assert '<p class="drop">' not in html.split("<body>", 1)[1]
+
+
+def test_pull_quote_is_a_sentence():
+    dated = """# Brief
+
+The window runs **July 1 to September 30, 2026** and the rebate is owed on paid invoices only.
+"""
+    html, notes = render_layout(dated, style="editorial", title="Brief")
+    assert notes == []
+    assert "asl-quote pull" not in html
+
+    numbered = """# Brief
+
+**$15,459.15**
+"""
+    html, notes = render_layout(numbered, style="editorial", title="Brief")
+    assert notes == []
+    assert "asl-quote pull" not in html
+
+    short = """# Brief
+
+**Hold the payout.**
+"""
+    html, notes = render_layout(short, style="editorial", title="Brief")
+    assert notes == []
+    assert "asl-quote pull" not in html
+
+    quoted = """# Brief
+
+::: note
+Hold the payout. The rebate below is owed on paid invoices only and the date is July 1 to September 30, 2026.
+:::
+
+## Record
+> July 1 to September 30, 2026
+
+The rebate stays on paid invoices across the whole quarter and nothing else is due.
+"""
+    html, notes = render_layout(quoted, style="editorial", title="Brief")
+    assert notes == []
+    quote = re.sub("<[^>]+>", "", html.split('class="asl-quote pull"', 1)[1].split("</blockquote>", 1)[0])
+    assert "September 30" not in quote
+    assert "Hold the payout" not in quote
+    assert "rebate stays on paid invoices" in quote
+    assert len(quote.split()) >= 8
+
+
+def test_bold_risk_cards_fit_real_items():
+    detail = (
+        "high chance the payout calendar slips a week and the invoice stays blocked until the next cycle closes. "
+        "high chance the payout calendar slips a week and the invoice stays blocked until the next cycle closes"
+    )
+    lead = f"Payout calendar: {detail}"
+    assert 160 < len(lead) <= 300
+    source = f"""# Rebate
+
+## Main risks
+- **Payout calendar:** {detail}
+- **Open invoice:** one invoice is still open and the tax line is only an estimate until the books close
+"""
+    html, notes = render_layout(source, style="bold", title="Rebate")
+    assert notes == []
+    assert "asl-risks" in html
+    assert 'class="risk-title">Payout calendar</strong>' in html
+    assert "tone-red" in html.split("<body>", 1)[1]
+
+    too_long = "Issue: " + ("x" * 320)
+    assert len(too_long) > 320
+    html, notes = render_layout(
+        f"# Rebate\n\n## Issues\n- High: {too_long}\n- Low: still open\n",
+        style="bold",
+        title="Rebate",
+    )
+    assert notes == []
+    assert "asl-risks" not in html.split("<body>", 1)[1]
+
+    html, notes = render_layout(
+        "# Rebate\n\n## Notes\n- High: the payout slips\n- Low: the tax line is estimated\n",
+        style="bold",
+        title="Rebate",
+    )
+    assert notes == []
+    assert "asl-risks" not in html.split("<body>", 1)[1]
+
+
+def _page(headers: list[str], rows: list[list[str]]) -> str:
+    head = "| " + " | ".join(headers) + " |"
+    rule = "|" + "|".join("---" for _ in headers) + "|"
+    body = "\n".join("| " + " | ".join(row) + " |" for row in rows)
+    html, notes = render_layout(f"# T\n\n{head}\n{rule}\n{body}\n", style="house", title="T")
+    assert notes == []
+    return html
+
+
+def test_auto_bar_chart_follows_a_short_number_table():
+    rows = "\n".join(f"| Shop {index} | ${index * 100} |" for index in range(1, 5))
+    source = f"""# Bills
+
+| Service | Billed |
+|---|---|
+{rows}
+"""
+    html, notes = render_layout(source, style="house", title="Bills")
+    assert notes == []
+    assert html.count('class="asl-chart"') == 1
+    assert html.index("</table>") < html.index('class="asl-chart"')
+    assert 'class="bar"' in html
+    doc = sanitize_html_document(html)
+    assert "<svg" in doc and "<script" not in doc.lower()
+
+    written = source + "\n```chart bar\nA: 1\nB: 2\nC: 3\n```\n"
+    html, notes = render_layout(written, style="bold", title="Bills")
+    assert notes == []
+    assert html.count("<svg") == 1
+
+    short = """# Bills
+
+| Service | Billed |
+|---|---|
+| One | $1 |
+| Two | $2 |
+"""
+    html, _notes = render_layout(short, style="editorial", title="Bills")
+    assert 'class="asl-chart"' not in html
+
+    wide = """# Bills
+
+| Service | Billed | Revenue |
+|---|---|---|
+| One | $1 | $1 |
+| Two | $2 | $1 |
+| Three | $3 | $1 |
+"""
+    html, _notes = render_layout(wide, style="swiss", title="Bills")
+    assert 'class="asl-chart"' not in html
+
+    many = "\n".join(f"| Shop {index} | {index} |" for index in range(1, 14))
+    html, _notes = render_layout(f"# Bills\n\n| Service | Billed |\n|---|---|\n{many}\n", style="house", title="Bills")
+    assert 'class="asl-chart"' not in html
+
+    skipped = [
+        (["Product", "Launched"], [["A", "1998"], ["B", "2004"], ["C", "2019"], ["D", "2024"]]),
+        (["Customer", "Account ID"], [["Ada", "100234"], ["Bea", "100235"], ["Cam", "100236"]]),
+        (["Store", "ZIP"], [["North", "33602"], ["South", "33606"], ["East", "33609"]]),
+        (["Office", "Phone"], [["North", "8135550100"], ["South", "8135550101"], ["East", "8135550102"]]),
+        (["Metric", "Value"], [["Invoices", "136"], ["Members", "28"], ["Months", "3"], ["Rate", "15"]]),
+        (["Model", "Rank"], [["A", "1"], ["B", "2"], ["C", "3"]]),
+    ]
+    for headers, rows in skipped:
+        assert 'class="asl-chart"' not in _page(headers, rows)
+        assert "1,998" not in _page(headers, rows)
+
+    mixed_rows = [["Invoices", "136"], ["Members", "28"], ["Months", "3"], ["Rebate rate", "15"]]
+    for headers in (
+        ["Metric", "Value"],
+        ["KPI", "Value"],
+        ["Stat", "Total"],
+        ["Fact", "Figure"],
+        ["Detail", "Count"],
+        ["Summary", "Amount"],
+        ["Category", "Value"],
+    ):
+        assert 'class="asl-chart"' not in _page(headers, mixed_rows)
+
+    billing = _page(
+        ["Month", "Invoices", "Billed", "Rebate (15%)"],
+        [
+            ["July", "45", "$38,185", "$5,727.75"],
+            ["August", "43", "$28,935", "$4,340.25"],
+            ["September", "48", "$35,941", "$5,391.15"],
+        ],
+    )
+    assert billing.count('class="asl-chart"') == 1
+    label = billing.split('aria-label="', 1)[1].split('"', 1)[0]
+    assert "July" in label and "$38,185" in label and "45" not in label
+
+    revenue = _page(
+        ["Region", "Revenue"],
+        [["North", "$1,705"], ["South", "$810"], ["East", "$0"]],
+    )
+    assert revenue.count('class="asl-chart"') == 1
+    assert "$1,705" in revenue
+
+    monthly = _page(
+        ["Month", "Shop", "Billed"],
+        [["July", "North", "$38,185"], ["August", "South", "$28,935"], ["September", "East", "$35,941"]],
+    )
+    assert monthly.count('class="asl-chart"') == 1
+    assert monthly.index("</table>") < monthly.index('class="asl-chart"')
+    assert "July" in monthly and "North" not in monthly.split("<svg", 1)[1]
+
+    from artifactsmith.layout.chart import aria_label
+
+    years = aria_label("bar", "", ["A", "B"], [1998, 2004], "")
+    assert "1998" in years and "2004" in years and "1,998" not in years
+    assert "$1,998" in aria_label("bar", "", ["A"], [1998], "$")
 
 
 def test_samples_render_without_notes():

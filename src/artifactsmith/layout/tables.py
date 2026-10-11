@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from .chart import _number
 from .inline import MAX_COLSPAN, esc
 from .model import Block, Cell, class_attr
 
@@ -269,3 +270,164 @@ def _row(
         parts.append(f"<{use}{scope}{span_attr}{class_attr(*classes)}{data}>{shown}</{use}>")
     parts.append("</tr>")
     return "".join(parts)
+
+
+_ID_HEADER = re.compile(
+    r"(?:^|[^a-z0-9])(?:ids?|codes?|zips?|postal|phones?|years?|dates?|ranks?|numbers?|refs?|no)(?:[^a-z0-9]|$)|#",
+    re.I,
+)
+_FACT_LABEL = re.compile(r"^(metrics?|measures?|fields?|items?|keys?)$", re.I)
+_QUANTITY_HEADER = re.compile(
+    r"amounts?|totals?|revenues?|billed|billing|costs?|prices?|fees?|paid|owed|rebates?|"
+    r"counts?|qty|quantit(?:y|ies)|invoices?|members?|sales?|spend|balances?|hours?|"
+    r"rates?|taxes|tax|profits?|margins?|percents?|pct|figures?|values?|sums?",
+    re.I,
+)
+# Row labels that name a measure. Two or more means a key-value fact table.
+_METRIC_LABEL = re.compile(
+    _QUANTITY_HEADER.pattern + r"|months?|days?|weeks?|years?|people|users?|rate|ratio|average|median|count of",
+    re.I,
+)
+_PRIMARY_MONEY = re.compile(r"billed|revenue|sales|totals?|amounts?|spend|costs?|paid|balance", re.I)
+
+
+def auto_bar_chart(block: Block) -> Block | None:
+    """A bar chart for one measured amount column, 3 to 12 data rows.
+
+    A 2-column table uses the second column. A wider table with several amount
+    columns charts the one primary money column (billed, revenue, total, and so
+    on). Years, IDs, ranks, and key-value fact tables are left as tables. The
+    caller skips this when the page already has a chart.
+    """
+    headers, rows, _clipped = limit_table(list(block.headers), [list(row) for row in block.rows])
+    data = rows[:-1] if rows and _is_total_row(rows[-1]) else list(rows)
+    if not 3 <= len(data) <= 12:
+        return None
+    width = _width(headers, data)
+    if width < 2:
+        return None
+    columns = _plain_columns(headers, data, width)
+    if columns is None:
+        return None
+    amounts = [index for index, column in enumerate(columns) if _amount_series(column) is not None]
+    amount_at = _amount_column(columns, amounts, width)
+    if amount_at is None:
+        return None
+    label_at = _label_index(columns, amount_at)
+    if label_at is None or _FACT_LABEL.fullmatch(columns[label_at][0].strip()):
+        return None
+    series = _amount_series(columns[amount_at])
+    if series is None:
+        return None
+    values, unit = series
+    labels = [cell.strip()[:80] for cell in columns[label_at][1]]
+    if any(not label for label in labels) or _mixed_measures(labels):
+        return None
+    kind = "hbar" if len(labels) > 6 else "bar"
+    return Block(kind="chart", plain=kind, html=unit, labels=tuple(labels), numbers=tuple(values))
+
+
+def _amount_column(columns: list[tuple[str, list[str]]], amounts: list[int], width: int) -> int | None:
+    """The one amount column, or the single primary money column when several qualify."""
+    if len(amounts) == 1:
+        chosen = amounts[0]
+        if width == 2 and chosen != 1:
+            return None
+        return chosen
+    primary = [
+        index
+        for index in amounts
+        if (series := _amount_series(columns[index])) is not None
+        and series[1] in "$€£¥"
+        and _PRIMARY_MONEY.search(columns[index][0])
+    ]
+    if len(primary) == 1:
+        return primary[0]
+    return None
+
+
+def _mixed_measures(labels: list[str]) -> bool:
+    """True when the row labels name different measures, as in a fact table."""
+    return sum(1 for label in labels if _METRIC_LABEL.search(label)) >= 2
+
+
+def _plain_columns(headers: list[Cell], rows: list[list[Cell]], width: int) -> list[tuple[str, list[str]]] | None:
+    columns: list[tuple[str, list[str]]] = [
+        (headers[index].plain.strip() if index < len(headers) else "", []) for index in range(width)
+    ]
+    for row in rows:
+        placed = _place(row, width)
+        if any(span != 1 for _cell, _col, span in placed):
+            return None
+        for cell, col, _span in placed:
+            if col < width:
+                columns[col][1].append(cell.plain.strip())
+    return columns
+
+
+def _label_index(columns: list[tuple[str, list[str]]], amount_at: int) -> int | None:
+    for index, (_header, cells) in enumerate(columns):
+        if index != amount_at and all(cell for cell in cells):
+            return index
+    return None
+
+
+def _amount_series(column: tuple[str, list[str]]) -> tuple[list[float], str] | None:
+    """Values and unit when the column is one measured quantity."""
+    header, raws = column
+    if _ID_HEADER.search(header):
+        return None
+    values: list[float] = []
+    symbols: list[str] = []
+    for raw in raws:
+        value = _number(raw)
+        if value is None or value < 0:
+            return None
+        values.append(value)
+        symbols.append(_amount_symbol(raw))
+    if any(symbols) and len(set(symbols)) != 1:
+        return None
+    unit = symbols[0] if symbols and symbols[0] else ""
+    if _all_years(values) or _id_like(values, unit):
+        return None
+    if unit == "" and _QUANTITY_HEADER.search(header) is None:
+        return None
+    return values, unit
+
+
+def _amount_symbol(raw: str) -> str:
+    stripped = raw.lstrip()
+    if stripped[:1] in "$€£¥":
+        return stripped[:1]
+    if stripped.endswith("%"):
+        return "%"
+    return ""
+
+
+def _all_years(values: list[float]) -> bool:
+    for value in values:
+        if value != int(value):
+            return False
+        year = int(value)
+        if not 1900 <= year <= 2100:
+            return False
+    return bool(values)
+
+
+def _id_like(values: list[float], unit: str) -> bool:
+    """Long integers with no currency, percent, decimal, or round amount."""
+    if unit or any(value != int(value) for value in values):
+        return False
+    numbers = [int(value) for value in values]
+    if not numbers or any(len(str(abs(number))) < 5 for number in numbers):
+        return False
+    return not any(_round_amount(number) for number in numbers)
+
+
+def _round_amount(number: int) -> bool:
+    if number < 100 or number % 100 != 0:
+        return False
+    core = number
+    while core % 10 == 0 and core:
+        core //= 10
+    return core < 1000
