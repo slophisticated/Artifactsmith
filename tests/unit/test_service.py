@@ -116,6 +116,95 @@ def test_fast_styles_apply_only_when_mode_is_omitted(svc, monkeypatch):
     assert plain["mode"] == "full"
 
 
+_HTML_PAGE = "<!DOCTYPE html><html><head><title>T</title></head><body><p>Ready</p></body></html>"
+_AS_IS = (
+    "Publish the attached HTML file exactly as-is as the page. "
+    "It is a finished, self-contained page: do not add, remove, reword or restyle anything; "
+    "keep every element, class, data-label attribute, style rule and link unchanged."
+)
+
+
+def test_finished_html_stays_full_when_mode_is_omitted(svc, monkeypatch):
+    monkeypatch.setattr(CFG, "fast_styles", frozenset({"house"}))
+    monkeypatch.setattr(CFG, "build_mode", "full")
+    p = _principal()
+    html = svc.create(
+        p,
+        display_name="Finished Page",
+        verbatim_request="summarize the notes",
+        style="house",
+        source_content=_HTML_PAGE,
+    )
+    assert html["mode"] == "full"
+    notes = svc.create(
+        p,
+        display_name="Notes Page",
+        verbatim_request="summarize the notes",
+        style="house",
+        source_content="# Pilot\n\nThe code is HARBOR-17.\n",
+    )
+    assert notes["mode"] == "fast"
+    explicit = svc.create(
+        p,
+        display_name="Explicit Fast",
+        verbatim_request="summarize the notes",
+        style="house",
+        mode="fast",
+        source_content=_HTML_PAGE,
+    )
+    assert explicit["mode"] == "fast"
+    wording = svc.create(
+        p,
+        display_name="As Is Wording",
+        verbatim_request=_AS_IS,
+        style="house",
+        source_content="# notes only\n",
+    )
+    assert wording["mode"] == "full"
+    numbers = svc.create(
+        p,
+        display_name="Unchanged Numbers",
+        verbatim_request="keep the numbers unchanged",
+        style="house",
+        source_content="# Pilot\n\n412 clicks\n",
+    )
+    assert numbers["mode"] == "fast"
+    fragment = svc.create(
+        p,
+        display_name="Html Fragment",
+        verbatim_request="turn these notes into a page",
+        style="house",
+        source_content="<p>hello</p>",
+    )
+    assert fragment["mode"] == "fast"
+    from_file = svc.create(
+        p,
+        display_name="File Html",
+        verbatim_request="summarize the notes",
+        style="house",
+        source_files=[{"name": "page.html", "content": _HTML_PAGE}],
+    )
+    assert from_file["mode"] == "full"
+    monkeypatch.setattr(CFG, "fast_styles", frozenset())
+    monkeypatch.setattr(CFG, "build_mode", "fast")
+    via_default = svc.create(
+        p,
+        display_name="Default Fast Html",
+        verbatim_request="summarize the notes",
+        style="bold",
+        source_content=_HTML_PAGE,
+    )
+    assert via_default["mode"] == "full"
+    via_notes = svc.create(
+        p,
+        display_name="Default Fast Notes",
+        verbatim_request="summarize the notes",
+        style="bold",
+        source_content="# Pilot\n\nnotes\n",
+    )
+    assert via_notes["mode"] == "fast"
+
+
 def test_display_name_strips_ooxml_controls(svc):
     p = _principal()
     created = svc.create(

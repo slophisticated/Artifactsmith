@@ -32,7 +32,7 @@ PDF uses WeasyPrint because it runs in the slim image without Chromium. Browser 
 
 ## Prompts
 
-`html` uses the house-style system prompt and `===FILE: index.html===` when `mode` is `full` (the default). `mode=fast` asks for `===FILE: page.md===` and the server renders `index.html` in the selected style. `AM_FAST_STYLES` can make `fast` the default for named styles when `mode` is omitted. `tests/unit/test_house_style.py` locks the prompt markers and the safety checks.
+`html` uses the house-style system prompt and `===FILE: index.html===` when `mode` is `full` (the default). `mode=fast` asks for `===FILE: page.md===` and the server renders `index.html` in the selected style. `AM_FAST_STYLES` can make `fast` the default for named styles when `mode` is omitted. A complete HTML document in the source, or a request to publish HTML unchanged, stays on `full` when `mode` is omitted. `tests/unit/test_house_style.py` locks the prompt markers and the safety checks.
 
 `markdown`, `pdf`, `docx`, and `xlsx` use a content prompt and `===FILE: content.md===`. Writing rules stay. Visual HTML rules do not apply.
 

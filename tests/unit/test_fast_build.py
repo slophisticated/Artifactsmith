@@ -117,9 +117,81 @@ async def test_needs_input_does_not_call_twice(monkeypatch):
         state["calls"] += 1
         return "===NEEDS_INPUT===\nNeed the store code.\n===END===\n"
 
-    with pytest.raises(NeedsInput, match="store code"):
+    with pytest.raises(NeedsInput, match="store code") as caught:
         await _build(monkeypatch, fake)
     assert state["calls"] == 1
+    assert "publish tool" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_fast_html_refusal_tells_caller_to_use_publish_or_full(monkeypatch):
+    state = {"calls": 0, "user": "", "system": ""}
+    verbatim = (
+        "Publish the attached HTML file exactly as-is as the page. do not add, remove, reword or restyle anything"
+    )
+
+    async def fake(model, system, user, timeout=300, *, effort=None):
+        assert effort == "low"
+        state["calls"] += 1
+        state["user"] = user
+        state["system"] = system
+        return (
+            "===NEEDS_INPUT===\n"
+            "The requested page is an HTML document, but this artifact accepts Markdown only "
+            "and cannot publish HTML, CSS, classes, attributes, or links exactly as-is.\n"
+            "===END===\n"
+        )
+
+    monkeypatch.setattr(b.llm, "call", fake)
+    with pytest.raises(NeedsInput, match="publish tool") as caught:
+        await b.run_build(
+            kind="web_static",
+            slug="s",
+            display_name="Pilot",
+            verbatim=verbatim,
+            model="gpt-4o-mini",
+            base_source=None,
+            base_version=None,
+            history=[],
+            progress=lambda _msg: None,
+            format="html",
+            mode="fast",
+            source={"source_content": "<!DOCTYPE html><html><body><p>Ready</p></body></html>"},
+        )
+    message = str(caught.value)
+    assert 'mode="full"' in message
+    assert len(message) <= 500
+    assert state["calls"] == 1
+    assert "publish tool" in state["user"]
+    assert "attached file" in state["user"]
+    assert "publish tool" not in state["system"]
+
+
+@pytest.mark.asyncio
+async def test_fast_summarize_html_does_not_ask_for_a_refusal(monkeypatch):
+    seen: dict[str, str] = {}
+
+    async def fake(model, system, user, timeout=300, *, effort=None):
+        seen["user"] = user
+        return _md(_PAGE)
+
+    monkeypatch.setattr(b.llm, "call", fake)
+    await b.run_build(
+        kind="web_static",
+        slug="s",
+        display_name="Pilot",
+        verbatim="Summarize this HTML page",
+        model="gpt-4o-mini",
+        base_source=None,
+        base_version=None,
+        history=[],
+        progress=lambda _msg: None,
+        format="html",
+        mode="fast",
+        source={"source_content": "<!DOCTYPE html><html><body><p>Ready</p></body></html>"},
+    )
+    assert "attached file" in seen["user"]
+    assert "publish tool" not in seen["user"]
 
 
 @pytest.mark.asyncio

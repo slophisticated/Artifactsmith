@@ -16,9 +16,11 @@ from ..builder import (
     _finish_text,
     _sweep_rendered,
     build_user_prompt,
+    clarify_fast_html_refusal,
     needs_input,
     parse_output,
     render_checked_body,
+    request_wants_html_unchanged,
     system_prompt_for,
 )
 from ..config import CFG
@@ -102,6 +104,14 @@ _FIX = (
     "Return the full reply again in the required format, fixing these problems."
 )
 
+# User prompt only, and only when the request asks to keep HTML unchanged.
+# Explicit mode=fast still runs; this tells that one call not to convert the page.
+_UNCHANGED_HTML_NOTE = (
+    "\nThe request asks to publish finished HTML unchanged. Fast mode writes Markdown only and cannot keep "
+    "HTML, CSS, classes, attributes, or links exactly as-is. Reply ONLY with ===NEEDS_INPUT=== naming the "
+    'publish tool for a finished page, or create with mode="full". Do not convert the page.\n'
+)
+
 
 class _Outcome:
     def __init__(self, result: BuildResult | None = None, problems: list[str] | None = None, unusable: bool = False):
@@ -130,6 +140,8 @@ async def run_fast_html(
     """Markdown layout first. Unusable output falls back to full HTML. Check failures retry Markdown."""
     system = fast_system_prompt(style)
     user = build_user_prompt(verbatim, display_name, None, base_version, history, source)
+    if request_wants_html_unchanged(verbatim):
+        user += _UNCHANGED_HTML_NOTE
     notes: list[str] = []
     progress("calling model (fast)")
     # effort=low is attached only when the model name is o1/o3/o4/gpt-5.
@@ -224,7 +236,7 @@ async def _accept(
         )
         if problems:
             return _Outcome(problems=problems)
-        raise NeedsInput(missing)
+        raise NeedsInput(clarify_fast_html_refusal(missing))
     if "===FILE:" not in text:
         return _Outcome(unusable=True)
     try:
