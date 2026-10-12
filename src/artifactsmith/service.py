@@ -303,9 +303,10 @@ class Service:
             style = parse_style(style, default=CFG.default_style)
         except StyleError as e:
             raise AMError(str(e)) from e
+        mode_omitted = mode is None or str(mode).strip() == ""
         try:
             default_mode = CFG.build_mode
-            if (mode is None or str(mode).strip() == "") and style in CFG.fast_styles:
+            if mode_omitted and style in CFG.fast_styles:
                 default_mode = "fast"
             mode = parse_build_mode(mode, default=default_mode)
         except ModeError as e:
@@ -333,6 +334,9 @@ class Service:
         if caps.get("web") or caps.get("connectors"):
             raise AMError("capabilities web/connectors are not available yet")
         bundle = self._source(source_content, source_files)
+        # A finished HTML page is not a Markdown fast build. Explicit mode="fast" still wins.
+        if mode_omitted and mode == "fast" and builder.skip_fast_for_finished_html(verbatim_request, bundle):
+            mode = "full"
         fingerprint = self._request_fingerprint(
             {
                 "op": "create",

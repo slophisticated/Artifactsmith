@@ -27,6 +27,47 @@ def test_needs_input_block():
     assert "store code" in (b.needs_input(text) or "")
 
 
+_HTML_PAGE = "<!DOCTYPE html><html><head><title>T</title></head><body><p>Ready</p></body></html>"
+
+
+def test_finished_html_detection_reuses_document_check():
+    assert b.source_has_html_document({"source_content": _HTML_PAGE})
+    assert b.source_has_html_document({"source_content": "\ufeff" + _HTML_PAGE})
+    assert b.source_has_html_document({"source_content": "```html\n" + _HTML_PAGE + "\n```"})
+    assert b.source_has_html_document({"source_files": [{"name": "page.html", "content": _HTML_PAGE}]})
+    assert not b.source_has_html_document({"source_content": "# Pilot\n\nnotes\n"})
+    assert not b.source_has_html_document({"source_content": "<p>fragment</p>"})
+    assert not b.source_has_html_document({"source_content": "<!-- note -->\n" + _HTML_PAGE})
+    assert not b.source_has_html_document(None)
+    assert b.request_wants_html_unchanged("Publish the attached HTML file exactly as-is")
+    assert b.request_wants_html_unchanged("do not restyle the HTML page")
+    assert not b.request_wants_html_unchanged("keep the numbers unchanged")
+    assert not b.request_wants_html_unchanged("")
+    assert b.skip_fast_for_finished_html("summarize", {"source_content": _HTML_PAGE})
+    assert not b.skip_fast_for_finished_html("summarize", {"source_content": "# notes\n"})
+
+
+def test_fast_html_refusal_names_publish_or_full():
+    produced = (
+        "The requested page is an HTML document, but this artifact accepts Markdown only "
+        "and cannot publish HTML, CSS, classes, attributes, or links exactly as-is."
+    )
+    clarified = b.clarify_fast_html_refusal(produced)
+    assert "publish tool" in clarified
+    assert 'mode="full"' in clarified
+    assert len(clarified) <= 500
+    other = (
+        "The requested page is HTML, but this artifact must be emitted as Markdown only. "
+        "Please provide permission to include raw HTML."
+    )
+    other_out = b.clarify_fast_html_refusal(other)
+    assert "publish tool" in other_out and 'mode="full"' in other_out
+    assert b.clarify_fast_html_refusal("Need the store code.") == "Need the store code."
+    assert b.clarify_fast_html_refusal("Need the HTML color") == "Need the HTML color"
+    already = 'HTML accepts Markdown only. Use the publish tool, or call create with mode="full".'
+    assert b.clarify_fast_html_refusal(already) == already
+
+
 def test_needs_input_ignored_when_file_present():
     text = "===FILE: index.html===\n<html></html>\n===NEEDS_INPUT===\nnope\n"
     assert b.needs_input(text) is None
@@ -185,6 +226,8 @@ def test_source_block_and_edit_prompt():
     assert "none supplied" in empty
     filled = b.source_block({"source_content": "code is X", "source_files": [{"name": "notes.txt", "content": "more"}]})
     assert "code is X" in filled and "notes.txt" in filled
+    assert "attached file" in filled
+    assert "attached file" not in empty
     prompt = b.build_user_prompt("change it", "Pilot", "<html/>", 1, ["first"], {"source_content": "n"})
     assert "EDIT of version 1" in prompt
     assert b.system_prompt_for("html") == b.SYSTEM
