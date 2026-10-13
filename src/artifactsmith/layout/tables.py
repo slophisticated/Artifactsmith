@@ -297,6 +297,11 @@ _MEASURE_WORD = re.compile(
 )
 _FILLER_WORDS = frozenset({"a", "an", "and", "for", "of", "per", "the", "to"})
 _PRIMARY_MONEY = re.compile(r"\b(?:billed|revenue|sales|totals?|amounts?|spend|costs?|paid|balance)\b", re.I)
+# "est." is the abbreviation. A bare "est" would also match "best".
+_APPROX_MARK = re.compile(
+    r"~|≈|\b(?:approx(?:imate(?:ly)?)?|estimates?|estimated|about|around)\b|\best\.",
+    re.I,
+)
 _CURRENCY = frozenset("$€£¥")
 
 
@@ -304,9 +309,11 @@ def auto_bar_chart(block: Block) -> Block | None:
     """A bar chart for one measured amount column, 3 to 12 data rows.
 
     A 2-column table uses the second column. A wider table charts the one
-    currency column, or the single primary money column (billed, revenue, total)
-    when several currency columns qualify. Years, IDs, ranks, and key-value fact
-    tables are left as tables. The caller skips this when the page already has a chart.
+    currency column, or the single whole-word money column (billed, revenue, total)
+    when several currency columns qualify. An estimate or approximate column
+    (Est. cost, "~$310") is not charted, and loses to a real money column.
+    Years, IDs, ranks, and key-value fact tables are left as tables. The caller
+    skips this when the page already has a chart.
     """
     headers, rows, _clipped = limit_table(list(block.headers), [list(row) for row in block.rows])
     data = rows[:-1] if rows and _is_total_row(rows[-1]) else list(rows)
@@ -337,14 +344,17 @@ def auto_bar_chart(block: Block) -> Block | None:
 
 
 def _amount_column(columns: list[tuple[str, list[str]]], amounts: list[int], width: int) -> int | None:
-    """The one amount column, preferring a single currency column when several qualify."""
-    if len(amounts) == 1:
-        chosen = amounts[0]
+    """The one amount column. An estimate loses to real money and is not charted alone."""
+    usable = [index for index in amounts if not _approximate_column(columns[index])]
+    if not usable:
+        return None
+    if len(usable) == 1:
+        chosen = usable[0]
         if width == 2 and chosen != 1:
             return None
         return chosen
     currency = []
-    for index in amounts:
+    for index in usable:
         series = _amount_series(columns[index])
         if series is None:
             continue
@@ -354,11 +364,25 @@ def _amount_column(columns: list[tuple[str, list[str]]], amounts: list[int], wid
             currency.append(index)
     if len(currency) == 1:
         return currency[0]
-    pool = currency or amounts
-    primary = [index for index in pool if _PRIMARY_MONEY.search(columns[index][0])]
+    pool = currency or usable
+    primary = [index for index in pool if _money_header(columns[index][0])]
     if len(primary) == 1:
         return primary[0]
     return None
+
+
+def _money_header(header: str) -> bool:
+    """True when every word is a money word. "Billed" is; "Est. cost" is not."""
+    words = [word for word in re.findall(r"[A-Za-z]+", header) if word.lower() not in _FILLER_WORDS]
+    return bool(words) and all(_PRIMARY_MONEY.fullmatch(word) for word in words)
+
+
+def _approximate_column(column: tuple[str, list[str]]) -> bool:
+    """True for "~$310", "Est. cost", or another estimate or approx column."""
+    header, raws = column
+    if _APPROX_MARK.search(header):
+        return True
+    return any(_APPROX_MARK.search(raw) for raw in raws)
 
 
 def _mixed_measures(labels: list[str]) -> bool:

@@ -169,6 +169,30 @@ def test_finished_html_stays_full_when_mode_is_omitted(svc, monkeypatch):
         source_content="# Pilot\n\n412 clicks\n",
     )
     assert numbers["mode"] == "fast"
+    nearby = svc.create(
+        p,
+        display_name="Html Mention",
+        verbatim_request="Build an HTML page from these notes. Keep the store code unchanged.",
+        style="house",
+        source_content="# Pilot\n\nThe code is HARBOR-17.\n",
+    )
+    assert nearby["mode"] == "fast"
+    do_not_add = svc.create(
+        p,
+        display_name="Do Not Add",
+        verbatim_request="Do not add a chart. The accent is the HTML color #c45.",
+        style="house",
+        source_content="# Pilot\n\nnotes\n",
+    )
+    assert do_not_add["mode"] == "fast"
+    keep_page = svc.create(
+        p,
+        display_name="Keep Html Page",
+        verbatim_request="Keep the HTML page unchanged",
+        style="house",
+        source_content="# notes only\n",
+    )
+    assert keep_page["mode"] == "full"
     fragment = svc.create(
         p,
         display_name="Html Fragment",

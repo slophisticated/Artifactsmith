@@ -306,9 +306,21 @@ def _without_end_marker(text: str) -> str:
     return _END_TAIL_RE.sub("", text)
 
 
+# The unchanged words have to attach to the HTML page itself. "Keep the numbers
+# unchanged" next to a mention of HTML is a normal fast Markdown request.
 _UNCHANGED_HTML_RE = re.compile(
-    r"\bhtml\b[\s\S]{0,500}\b(?:as[- ]is|unchanged|do not (?:add|remove|reword|restyle))\b"
-    r"|\b(?:as[- ]is|unchanged|do not (?:add|remove|reword|restyle))\b[\s\S]{0,500}\bhtml\b",
+    r"\b(?:publish|republish|keep|leave|preserve)\b"
+    r"(?:\s+(?:the|this|that|attached|supplied|existing|finished|complete|current)){0,3}"
+    r"\s+html(?:\s+(?:page|file|document|source))?"
+    r"(?:\s+(?:exactly|must|should|stay|stays|remain|remains|left|kept|be|as)){0,3}"
+    r"\s+(?:as[- ]is|unchanged|verbatim|untouched)\b"
+    r"|\bhtml(?:\s+(?:page|file|document|source))?"
+    r"\s+(?:is\s+|stays?\s+|remains?\s+|left\s+|kept\s+)?(?:exactly\s+)?"
+    r"(?:as[- ]is|unchanged|verbatim|untouched)\b"
+    r"|\b(?:as[- ]is|unchanged|verbatim|untouched)\s+html(?:\s+(?:page|file|document|source))?\b"
+    r"|\bdo not\s+(?:reword|restyle)\b(?:\s+\w+){0,4}\s+html(?:\s+(?:page|file|document|source))?\b"
+    r"|\bhtml\b[\s\S]{0,80}\bdo not\s+add,?\s+remove,?\s+reword\s+or\s+restyle\b"
+    r"|\bdo not\s+add,?\s+remove,?\s+reword\s+or\s+restyle\b[\s\S]{0,80}\bhtml\b",
     re.I,
 )
 _HTML_REFUSAL_RE = re.compile(
@@ -316,7 +328,7 @@ _HTML_REFUSAL_RE = re.compile(
     r"|\b(?:markdown only|accepts markdown|must be emitted as markdown|cannot publish html)\b",
     re.I,
 )
-_FAST_HTML_HINT = ' Use the publish tool for a finished page, or call create with mode="full".'
+_FAST_HTML_HINT = ' To publish HTML as-is, use the publish tool, or call create with mode="full".'
 
 
 def source_has_html_document(source: dict[str, Any] | None) -> bool:
@@ -338,7 +350,11 @@ def source_has_html_document(source: dict[str, Any] | None) -> bool:
 
 
 def request_wants_html_unchanged(verbatim: str) -> bool:
-    """True when the request asks to publish HTML as-is, not when notes say \"unchanged\"."""
+    """True when the request asks to publish the HTML page as-is.
+
+    A nearby "unchanged" or "do not add" is not enough. Those show up in ordinary
+    Markdown requests that also mention HTML.
+    """
     return _UNCHANGED_HTML_RE.search(verbatim or "") is not None
 
 
