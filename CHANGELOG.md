@@ -13,6 +13,8 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 ### Fixed
 
 - A finished HTML document, or a request to publish HTML unchanged, stays on the full build when mode is omitted. Fast mode's HTML refusal tells the caller to use publish or mode=full.
+- Only a request to publish that HTML as-is skips fast mode. Mentioning HTML beside "unchanged" or "do not add" stays fast. A fast HTML refusal says to publish HTML as-is with the publish tool or mode=full.
+- Automatic charts skip approximate cost columns such as "~$310" and "Est. cost" when a real money column is present, and do not chart an estimate column on its own.
 - Chart labels match whole words, so Corporate, Wholesale, and Paid search are names; a blank unit is not money; chart text reads "412 clicks".
 - Fast pages stay within a phone width without splitting short words; `AM_FAST_STYLES` can default named styles to fast; drop caps and charts skip code-heavy paragraphs, partial measure names, and non-currency columns.
 - Fast pages take on each style's own design. A table draws a bar chart for its one main amount when the page has none; mixed facts, years, IDs, and ranks stay tables.

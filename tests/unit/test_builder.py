@@ -40,8 +40,17 @@ def test_finished_html_detection_reuses_document_check():
     assert not b.source_has_html_document({"source_content": "<!-- note -->\n" + _HTML_PAGE})
     assert not b.source_has_html_document(None)
     assert b.request_wants_html_unchanged("Publish the attached HTML file exactly as-is")
+    assert b.request_wants_html_unchanged("Keep the HTML page unchanged")
+    assert b.request_wants_html_unchanged("Leave this HTML document as-is")
+    assert b.request_wants_html_unchanged("The HTML page is unchanged")
     assert b.request_wants_html_unchanged("do not restyle the HTML page")
+    assert b.request_wants_html_unchanged("do not add, remove, reword or restyle the HTML")
     assert not b.request_wants_html_unchanged("keep the numbers unchanged")
+    assert not b.request_wants_html_unchanged("Build an HTML page from these notes. Keep the store code unchanged.")
+    assert not b.request_wants_html_unchanged("Do not add a chart. The accent is the HTML color #c45.")
+    assert not b.request_wants_html_unchanged("Summarize the HTML email. Do not remove the disclaimer.")
+    assert not b.request_wants_html_unchanged("Show HTML examples but leave the prices unchanged.")
+    assert not b.request_wants_html_unchanged("keep the HTML color unchanged")
     assert not b.request_wants_html_unchanged("")
     assert b.skip_fast_for_finished_html("summarize", {"source_content": _HTML_PAGE})
     assert not b.skip_fast_for_finished_html("summarize", {"source_content": "# notes\n"})
@@ -55,6 +64,7 @@ def test_fast_html_refusal_names_publish_or_full():
     clarified = b.clarify_fast_html_refusal(produced)
     assert "publish tool" in clarified
     assert 'mode="full"' in clarified
+    assert "as-is" in clarified
     assert len(clarified) <= 500
     other = (
         "The requested page is HTML, but this artifact must be emitted as Markdown only. "
@@ -64,6 +74,10 @@ def test_fast_html_refusal_names_publish_or_full():
     assert "publish tool" in other_out and 'mode="full"' in other_out
     assert b.clarify_fast_html_refusal("Need the store code.") == "Need the store code."
     assert b.clarify_fast_html_refusal("Need the HTML color") == "Need the HTML color"
+    color = b.clarify_fast_html_refusal("Need the HTML color for the markdown section")
+    assert color == "Need the HTML color for the markdown section"
+    short = b.clarify_fast_html_refusal("Cannot publish HTML as-is.")
+    assert "publish tool" in short and 'mode="full"' in short and "as-is" in short
     already = 'HTML accepts Markdown only. Use the publish tool, or call create with mode="full".'
     assert b.clarify_fast_html_refusal(already) == already
 

@@ -108,8 +108,8 @@ _FIX = (
 # Explicit mode=fast still runs; this tells that one call not to convert the page.
 _UNCHANGED_HTML_NOTE = (
     "\nThe request asks to publish finished HTML unchanged. Fast mode writes Markdown only and cannot keep "
-    "HTML, CSS, classes, attributes, or links exactly as-is. Reply ONLY with ===NEEDS_INPUT=== naming the "
-    'publish tool for a finished page, or create with mode="full". Do not convert the page.\n'
+    "HTML, CSS, classes, attributes, or links exactly as-is. Reply ONLY with ===NEEDS_INPUT===. "
+    'To publish HTML as-is, use the publish tool, or call create with mode="full". Do not convert the page.\n'
 )
 
 

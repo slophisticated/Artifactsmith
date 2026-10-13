@@ -754,6 +754,51 @@ def test_metric_labels_ignore_substrings_and_blank_units_are_not_money():
     assert "412clicks" not in clicks
 
 
+def test_approximate_cost_columns_are_not_charted():
+    billed = _page(
+        ["Shop", "Est. cost", "Billed"],
+        [["North", "$310", "$1,200"], ["South", "$280", "$980"], ["East", "$410", "$1,500"]],
+    )
+    assert billed.count('class="asl-chart"') == 1
+    billed_label = billed.split('aria-label="', 1)[1].split('"', 1)[0]
+    assert "$1,200" in billed_label and "$310" not in billed_label
+
+    tilde = _page(
+        ["Shop", "Cost", "Billed"],
+        [["North", "~$310", "$1,200"], ["South", "~$280", "$980"], ["East", "~$410", "$1,500"]],
+    )
+    assert tilde.count('class="asl-chart"') == 1
+    tilde_label = tilde.split('aria-label="', 1)[1].split('"', 1)[0]
+    assert "$1,200" in tilde_label and "310" not in tilde_label
+
+    estimated = _page(
+        ["Shop", "Estimated cost", "Revenue"],
+        [["North", "$310", "$1,200"], ["South", "$280", "$980"], ["East", "$410", "$1,500"]],
+    )
+    assert estimated.count('class="asl-chart"') == 1
+    estimated_label = estimated.split('aria-label="', 1)[1].split('"', 1)[0]
+    assert "$1,200" in estimated_label and "$310" not in estimated_label
+
+    approx = _page(
+        ["Shop", "Approx. cost", "Revenue"],
+        [["North", "$310", "$1,200"], ["South", "$280", "$980"], ["East", "$410", "$1,500"]],
+    )
+    assert approx.count('class="asl-chart"') == 1
+
+    alone = _page(
+        ["Shop", "Estimate"],
+        [["North", "$310"], ["South", "$280"], ["East", "$410"]],
+    )
+    assert 'class="asl-chart"' not in alone
+
+    exact_cost = _page(
+        ["Shop", "Cost"],
+        [["North", "$310"], ["South", "$280"], ["East", "$410"]],
+    )
+    assert exact_cost.count('class="asl-chart"') == 1
+    assert "$310" in exact_cost.split('aria-label="', 1)[1].split('"', 1)[0]
+
+
 def test_samples_render_without_notes():
     expectations = {
         "a-pmcc-watch.md": ("Hold both", 'colspan="8"', "Long-term call", "Confirmed", "nasdaq.com"),
