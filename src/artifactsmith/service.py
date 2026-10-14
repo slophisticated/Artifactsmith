@@ -610,6 +610,7 @@ class Service:
         workspace: str | None = None,
         idempotency_key: str | None = None,
         style: str | None = None,
+        note: str | None = None,
     ) -> dict[str, Any]:
         """Queue a finished page. The worker skips the model and runs the output checks."""
         from .publishing import admit_publish
@@ -629,6 +630,7 @@ class Service:
             workspace=workspace,
             idempotency_key=idempotency_key,
             style=style,
+            note=note,
         )
 
     # ---------------- worker ----------------
@@ -880,6 +882,8 @@ class Service:
             "mode": v.get("mode") or "full",
             "notes": res.notes,
         }
+        if res.model == builder.PUBLISHED_MODEL:
+            manifest["safety_changes"] = list(res.safety_changes)
         await asyncio.to_thread(
             self.store.put, prefix + "manifest.json", json.dumps(manifest, indent=2).encode(), "application/json"
         )
@@ -1016,7 +1020,28 @@ class Service:
         a = self.get_artifact(principal, a["id"])
         out = self.card(a, v)
         out["share"] = self._share_state(a["id"], version)
+        if v["status"] == "done" and v.get("model") == builder.PUBLISHED_MODEL:
+            recorded = await asyncio.to_thread(self._manifest, a, v)
+            if isinstance(recorded, dict) and "safety_changes" in recorded:
+                out["safety_changes"] = recorded["safety_changes"]
+            elif recorded is None:
+                out["manifest_error"] = "store_read_failed"
         return out
+
+    def _manifest(self, a: dict[str, Any], v: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            data, _ct = self.store.get(Store.prefix(a["workspace"], a["id"], int(v["version"])) + "manifest.json")
+            loaded = json.loads(data)
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "manifest read failed artifact=%s version=%s: %s: %s",
+                a["id"],
+                v["version"],
+                type(e).__name__,
+                e,
+            )
+            return None
+        return loaded if isinstance(loaded, dict) else None
 
     def _share_state(self, aid: str, version: int) -> dict[str, Any]:
         floating = self.db.one(
@@ -1089,12 +1114,19 @@ class Service:
             )
         return {"workspace": ws, "count": len(items), "artifacts": items}
 
-    def inspect(self, principal: dict[str, Any], artifact_id: str, version: int | None = None) -> dict[str, Any]:
+    def inspect(
+        self,
+        principal: dict[str, Any],
+        artifact_id: str,
+        version: int | None = None,
+        include_content: bool = False,
+    ) -> dict[str, Any]:
         self.require(principal, "read")
         a = self.get_artifact(principal, artifact_id)
         vs = self.db.all("SELECT * FROM versions WHERE artifact_id=? ORDER BY version", a["id"])
-        history = [
-            {
+        history = []
+        for x in vs:
+            row = {
                 "version": x["version"],
                 "base_version": x["base_version"],
                 "status": x["status"],
@@ -1107,8 +1139,10 @@ class Service:
                 "mode": x.get("mode") or "full",
                 "format": version_format(x, a),
             }
-            for x in vs
-        ]
+            stored_note = (x.get("note") or "").strip()
+            if stored_note:
+                row["note"] = stored_note
+            history.append(row)
         target = version or next((x["version"] for x in reversed(vs) if x["status"] == "done"), None)
         out = {
             "artifact_id": a["id"],
@@ -1142,8 +1176,52 @@ class Service:
                     )
                     out["manifest_error"] = "store_read_failed"
                 out["card"] = self.card(a, v)
+                recorded = out.get("manifest")
+                if isinstance(recorded, dict) and "safety_changes" in recorded:
+                    out["safety_changes"] = recorded["safety_changes"]
             out["share"] = self._share_state(a["id"], int(target))
+            if include_content and v["status"] == "done":
+                self._attach_inspected_content(out, a, v)
         return out
+
+    def _attach_inspected_content(self, out: dict[str, Any], a: dict[str, Any], v: dict[str, Any]) -> None:
+        """Read the target version's text after check_access. Never the binary primary."""
+        from .renderers.safety import CONTENT_MAX_CHARS
+
+        fmt = version_format(v, a)
+        binary = fmt in {"pdf", "docx", "xlsx"}
+        name = builder.source_name(a["kind"], fmt) if binary else str(v.get("primary_file") or "")
+        if binary:
+            names = {item.get("name") for item in jloads(v.get("files_json"), [])}
+            if name not in names:
+                out["content"] = {"file": "content.md", "primary_binary": True}
+                return
+        if not name:
+            return
+        key = Store.prefix(a["workspace"], a["id"], int(v["version"])) + name
+        try:
+            data, _ct = self.store.get(key)
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "inspect content read failed artifact=%s version=%s: %s: %s",
+                a["id"],
+                v["version"],
+                type(e).__name__,
+                e,
+            )
+            out["content_error"] = "store_read_failed"
+            return
+        content: dict[str, Any] = {"file": name, "size_bytes": len(data)}
+        if binary:
+            content["primary_binary"] = True
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            out["content"] = content
+            return
+        if len(text) <= CONTENT_MAX_CHARS:
+            content["text"] = text
+        out["content"] = content
 
     def _done_version(self, a: dict[str, Any], version: int | None) -> dict[str, Any]:
         if version:

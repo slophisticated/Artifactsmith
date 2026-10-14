@@ -18,6 +18,19 @@ from .svg_sanitize import SVG_CLEAN_CONTENT, SVG_TAGS, filter_svg_attribute, san
 from .svg_tree import remove_elements_with_content
 
 MAX_HTML_BYTES = 2_000_000
+SAFETY_CHANGE_ORDER = (
+    "stripped_markup",
+    "rewrote_image",
+    "hardened_anchor",
+    "escaped_title",
+    "added_csp",
+    "added_charset",
+    "added_viewport",
+    "added_doctype",
+    "linkified_url",
+    "added_heading",
+    "normalized_document",
+)
 
 
 class HtmlSanitizeError(ValueError):
@@ -234,7 +247,7 @@ def rewrite_remote_images_to_links(html: str) -> str:
     return _IMG_TAG_RE.sub(repl, html)
 
 
-def sanitize_html_document(body: str) -> str:
+def sanitize_html_document(body: str, *, linkify: bool = True, changes: list[str] | None = None) -> str:
     """Return a complete HTML document with allowlisted markup and sanitized CSS.
 
     Public http(s) ``<a href>`` links are kept (with rel/target hardening). Remote
@@ -244,7 +257,14 @@ def sanitize_html_document(body: str) -> str:
     if len(body.encode("utf-8")) > MAX_HTML_BYTES:
         raise HtmlSanitizeError("page too large")
     title_m = _TITLE_RE.search(body)
-    title = nh3.clean_text(unescape(title_m.group(1))).strip() if title_m else ""
+    submitted_title = title_m.group(1).strip() if title_m else ""
+    raw_title = unescape(submitted_title).strip() if submitted_title else ""
+    # clean_text encodes spaces as &#32;. Unescape once, then escape once, so a
+    # space stays a space and markup is a single entity.
+    cleaned_title = nh3.clean_text(raw_title).strip() if raw_title else ""
+    from .links import _html_label
+
+    title = _html_label(cleaned_title) if cleaned_title else ""
     # Do not unescape style contents before sanitizing (entity-encoded tags stay inert).
     css = sanitize_css("\n".join(_STYLE_RE.findall(body)))
     if _has_breakout(css):
@@ -255,11 +275,15 @@ def sanitize_html_document(body: str) -> str:
     fragment = _STYLE_RE.sub("", fragment)
     fragment = _TITLE_RE.sub("", fragment)
     # Before nh3 drops remote img src, rewrite public ones to anchors.
-    fragment = rewrite_remote_images_to_links(fragment)
+    imaged = rewrite_remote_images_to_links(fragment)
+    if changes is not None and imaged != fragment:
+        changes.append("rewrote_image")
+    fragment = imaged
     # nh3 unwraps unknown SVG tags and can leak their children; drop active ones first.
     if "<svg" in fragment.lower():
         fragment = remove_elements_with_content(fragment, SVG_CLEAN_CONTENT)
 
+    nh3_in = fragment
     cleaned = nh3.clean(
         fragment,
         tags=_ALLOWED_TAGS | set(SVG_TAGS),
@@ -270,6 +294,8 @@ def sanitize_html_document(body: str) -> str:
         link_rel="noopener noreferrer nofollow",
         strip_comments=True,
     )
+    if changes is not None and cleaned != nh3_in:
+        changes.append("stripped_markup")
     from .links import harden_external_anchors, linkify_html_text
 
     # Linkify bare public URLs in text nodes; harden rel/target on external <a href>.
@@ -277,9 +303,30 @@ def sanitize_html_document(body: str) -> str:
     # dropped them from href/src. Do not run strip_remote_urls here — it would
     # also erase allowed href values.
     cleaned = sanitize_svg_fragment(cleaned)
-    cleaned = linkify_html_text(cleaned)
-    cleaned = harden_external_anchors(cleaned)
+    if linkify:
+        linked = linkify_html_text(cleaned)
+        if changes is not None and linked != cleaned:
+            changes.append("linkified_url")
+        cleaned = linked
+    hardened = harden_external_anchors(cleaned)
+    if changes is not None and hardened != cleaned:
+        changes.append("hardened_anchor")
+    cleaned = hardened
 
+    if changes is not None:
+        # Compare to the submitted title text, not the unescaped copy. An
+        # already-escaped title such as AT&amp;T matches after the round trip.
+        if title and title != submitted_title:
+            changes.append("escaped_title")
+        lowered = body.lower()
+        if "<!doctype html>" not in lowered:
+            changes.append("added_doctype")
+        if EXPORT_CSP_META not in body:
+            changes.append("added_csp")
+        if 'charset="utf-8"' not in lowered and "charset='utf-8'" not in lowered:
+            changes.append("added_charset")
+        if _VIEWPORT_META not in body:
+            changes.append("added_viewport")
     style_block = f"<style>\n{css}\n</style>\n" if css.strip() else ""
     title_block = f"<title>{title}</title>\n" if title else ""
     doc = (
@@ -303,4 +350,8 @@ def sanitize_html_document(body: str) -> str:
         verify_export_document(doc, _ALLOWED_TAGS)
     except ValueError as exc:
         raise HtmlSanitizeError(str(exc)) from exc
+    if changes is not None:
+        if doc != body and not changes:
+            changes.append("normalized_document")
+        changes[:] = [name for name in SAFETY_CHANGE_ORDER if name in changes]
     return doc

@@ -36,7 +36,8 @@ INSTRUCTIONS = (
     "in publish is only for a page you designed yourself: it is shown exactly as given, with no "
     "ArtifactSmith styling. Pass format for pdf, docx, or xlsx. "
     "create and edit queue a background build and return artifact_id, version, and job_id immediately. "
-    "publish skips the model and runs the same safety checks. Call status with wait (up to 90 seconds) "
+    "publish skips the model and runs the same safety checks. An optional note is stored and shown by inspect. "
+    "include_content on inspect reads that version's text back. Call status with wait (up to 90 seconds) "
     "until the job is done, failed, or needs_input, then show the card (title, version, preview_url, "
     "assumptions). Pass the user's exact words in verbatim_request. Pass researched content in "
     "source_content or source_files. If a needed fact is missing, the job ends as needs_input with a short "
@@ -254,9 +255,14 @@ def publish(
     workspace: str | None = None,
     style: str | None = None,
     idempotency_key: str | None = None,
+    note: str | None = None,
 ) -> dict[str, Any]:
-    """Store a page with no model call. Returns artifact_id, version, and job_id immediately.
-    Then call status(job_id, wait=90).
+    """Store a page you have already finished. Use this when you already have the finished page.
+    No model call. Returns artifact_id, version, and job_id immediately. Then call status(job_id, wait=90).
+    When the job is done, status and inspect list safety_changes for each safety edit that changed the page.
+    HTML publish does not turn bare URLs into links. The document title is stored as given and escaped in the page.
+    note is optional. Inspect shows a non-empty note beside "Published a finished page." It is not the
+    text a later edit sends to the model. A secret, private link, or over-long note is rejected before a row exists.
 
     Want a styled page? Pass Markdown and it is styled automatically. Omit format when you pass
     markdown and no html. style is house, bold, editorial, playful, terminal, or swiss (default house)
@@ -301,6 +307,7 @@ def publish(
         workspace=workspace,
         idempotency_key=idempotency_key,
         style=style,
+        note=note,
     )
 
 
@@ -330,9 +337,21 @@ def list_artifacts(
 
 
 @mcp.tool()
-def inspect(ctx: Context[Any, Any, Any], artifact_id: str, version: int | None = None) -> dict[str, Any]:
-    """Manifest, files, build log, request history, and share state. Defaults to the latest done version."""
-    return _run(_svc().inspect, _principal(ctx), artifact_id, version)
+def inspect(
+    ctx: Context[Any, Any, Any],
+    artifact_id: str,
+    version: int | None = None,
+    include_content: bool = False,
+) -> dict[str, Any]:
+    """Manifest, files, build log, request history, and share state. Defaults to the latest done version.
+
+    include_content is optional and defaults to false. When true, the target done version adds
+    content with file, size_bytes, and text when that text is within the publish character cap.
+    PDF, DOCX, and XLSX return content.md and set primary_binary; they do not return the binary.
+    Over the cap, size_bytes is set and text is omitted. A store failure sets content_error to
+    store_read_failed. The call still requires read permission on this workspace.
+    """
+    return _run(_svc().inspect, _principal(ctx), artifact_id, version, include_content)
 
 
 @mcp.tool()

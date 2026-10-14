@@ -79,6 +79,37 @@ def test_linkifies_bare_public_urls_in_text():
     assert 'target="_blank"' in out
 
 
+def test_publish_html_can_skip_autolink_and_keeps_title_spaces():
+    raw = "<html><head><title>My Report</title></head><body><p>See https://example.com/doc</p></body></html>"
+    skipped = sanitize_html(raw, linkify=False)
+    assert "<title>My Report</title>" in skipped
+    assert "&#32;" not in skipped
+    assert 'href="https://example.com/doc"' not in skipped
+    assert "https://example.com/doc" in skipped
+    linked = sanitize_html(raw)
+    assert 'href="https://example.com/doc"' in linked
+
+
+def test_title_markup_is_escaped_once():
+    raw = "<html><head><title>A < B</title></head><body><p>ok</p></body></html>"
+    out = sanitize_html(raw)
+    assert "<title>A &lt; B</title>" in out
+    assert "&amp;lt;" not in out
+
+
+def test_escaped_title_compares_to_the_submitted_title_text():
+    already = "<html><head><title>AT&amp;T</title></head><body><p>ok</p></body></html>"
+    same: list[str] = []
+    kept = sanitize_html(already, linkify=False, changes=same)
+    assert "<title>AT&amp;T</title>" in kept
+    assert "escaped_title" not in same
+    entity = "<html><head><title>Hello&#32;World</title></head><body><p>ok</p></body></html>"
+    changed: list[str] = []
+    rewritten = sanitize_html(entity, linkify=False, changes=changed)
+    assert "<title>Hello World</title>" in rewritten
+    assert "escaped_title" in changed
+
+
 def test_style_breakout_via_html_entities_is_removed():
     """Entity-encoded </style><img onerror> must not become live markup after sanitize."""
     raw = (
