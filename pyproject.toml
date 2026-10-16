@@ -28,6 +28,7 @@ dependencies = [
     "weasyprint>=70,<71",
     "python-docx>=1.1,<2",
     "openpyxl>=3.1,<4",
+    "disposable-email-domains>=0.0.96",
 ]
 
 [project.optional-dependencies]
@@ -37,6 +38,7 @@ dev = [
     "pytest>=8",
     "pytest-cov>=6",
     "pytest-asyncio>=0.24",
+    "playwright>=1.49",
     "pre-commit>=4",
     "types-openpyxl>=3.1",
     "pip-audit>=2.7",
@@ -87,7 +89,7 @@ disallow_untyped_defs = true
 pretty = true
 
 [[tool.mypy.overrides]]
-module = ["weasyprint", "docx", "docx.*", "mcp", "mcp.*", "boto3", "botocore.*", "tinyhtml5", "mdit_py_plugins", "mdit_py_plugins.*"]
+module = ["weasyprint", "docx", "docx.*", "mcp", "mcp.*", "boto3", "botocore.*", "tinyhtml5", "mdit_py_plugins", "mdit_py_plugins.*", "disposable_email_domains"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

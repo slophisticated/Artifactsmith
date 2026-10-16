@@ -7,6 +7,7 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- Hosted trial at `/trial`, off until `AM_TRIAL_ENABLED=true`. A verified email gets one workspace token, shown once. Trial builds use `AM_TRIAL_MODEL` (default `anthropic/claude-haiku-5-5`) with a 16,000-token output cap and ignore the caller's model. Trial tokens cannot `publish`. Each trial has `AM_TRIAL_BUILD_LIMIT` builds (default 20) and `AM_TRIAL_BUILDS_PER_HOUR` (default 10). Internal tokens keep `AM_BUILDS_PER_HOUR` (default 20). `AM_TRIAL_DAILY_USD` (default 10) holds each trial build's worst-case cost before it runs and settles to the measured cost after. Trial jobs use at most one of the `AM_MAX_BUILDS` slots. Trial share links last at most 30 days. Trial pages add a noindex tag and an abuse footer (`AM_TRIAL_ABUSE_EMAIL`). Gmail dots and +tags count as one address. Idle trial workspaces are deleted after `AM_TRIAL_RETENTION_DAYS` (default 30).
 - My pages at `/app/` on the API origin. Paste a token to get an HttpOnly, SameSite=Strict session cookie (Secure when the public API URL is https). The page lists that workspace only, with search and a status filter, and a read-only detail page for versions and build jobs.
 - `inspect` takes optional `include_content`. When set, it returns the stored text of that version for the caller's workspace, capped at the same character limit as publish. PDF, DOCX, and XLSX return `content.md` and do not inline the binary.
 - `publish` takes an optional `note`. Inspect shows it beside `Published a finished page.` The note is not the sentence a later edit sends to the model.
@@ -15,6 +16,7 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Fixed
 
+- `/trial` and `/app` send `Referrer-Policy: same-origin`. An `Origin: null` form post is accepted only when `Sec-Fetch-Site` is `same-origin`. Trial build limits count reservation rows, so deleting an artifact does not reset them. Opening a magic link does not use it up; the "Show my token" button does. Sign-in mail includes `Date` and `Message-ID`. A model call that spent tokens settles that cost, or keeps the hold when the provider omits usage. Trial page CSS cannot hide the abuse footer. The token page names the free-build count and wraps Claude Desktop, Cursor, and generic MCP snippets. Idle trial cleanup also runs hourly.
 - A realistic `asmb_` token fails the secret check with or without `Bearer`, including inside a code block or URL and when a zero-width character splits it. `asmb_...`, `asmb_…`, `Bearer <token>`, `YOUR_TOKEN`, `$AM_TOKEN`, and `${AM_TOKEN}` still pass.
 - A `needs_input:` content-check failure keeps that prefix and the check name, and drops hosts, raw URLs, and credentials from the stored job error.
 - Stylesheet newlines between rules are removed so the bold sheet has room under its 8192-byte cap. Selectors and declarations are unchanged.
