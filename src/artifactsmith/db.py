@@ -156,6 +156,60 @@ CREATE TABLE IF NOT EXISTS trial_usage (
   created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS trial_usage_job ON trial_usage(job_id);
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  client_id TEXT PRIMARY KEY,
+  redirect_json TEXT NOT NULL,
+  auth_method TEXT NOT NULL,
+  created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS oauth_pending (
+  id_hash TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  state TEXT NOT NULL,
+  challenge TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  resource TEXT NOT NULL,
+  email_hash TEXT,
+  token_id TEXT,
+  created_at REAL NOT NULL,
+  expires_at REAL NOT NULL,
+  client_ip TEXT
+);
+CREATE TABLE IF NOT EXISTS oauth_links (
+  code_hash TEXT PRIMARY KEY,
+  pending_hash TEXT NOT NULL,
+  expires_at REAL NOT NULL,
+  used_at REAL,
+  email_hash TEXT,
+  token_id TEXT
+);
+CREATE TABLE IF NOT EXISTS oauth_grants (
+  code_hash TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  challenge TEXT NOT NULL,
+  token_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  resource TEXT NOT NULL,
+  expires_at REAL NOT NULL,
+  used_at REAL,
+  family_id TEXT
+);
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+  id TEXT PRIMARY KEY,
+  family_id TEXT NOT NULL,
+  access_hash TEXT NOT NULL UNIQUE,
+  refresh_hash TEXT NOT NULL UNIQUE,
+  client_id TEXT NOT NULL,
+  token_id TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  access_expires_at REAL NOT NULL,
+  refresh_expires_at REAL NOT NULL,
+  rotated_at REAL,
+  revoked_at REAL
+);
+CREATE INDEX IF NOT EXISTS oauth_tokens_family ON oauth_tokens(family_id);
 """
 
 
@@ -213,6 +267,14 @@ class DB:
         signup_cols = {str(r[1]) for r in self.conn.execute("PRAGMA table_info(trial_signups)").fetchall()}
         if signup_cols and "verified" not in signup_cols:
             self.conn.execute("ALTER TABLE trial_signups ADD COLUMN verified INTEGER NOT NULL DEFAULT 1")
+        pending_cols = {str(r[1]) for r in self.conn.execute("PRAGMA table_info(oauth_pending)").fetchall()}
+        if pending_cols and "client_ip" not in pending_cols:
+            self.conn.execute("ALTER TABLE oauth_pending ADD COLUMN client_ip TEXT")
+        link_cols = {str(r[1]) for r in self.conn.execute("PRAGMA table_info(oauth_links)").fetchall()}
+        if link_cols and "email_hash" not in link_cols:
+            self.conn.execute("ALTER TABLE oauth_links ADD COLUMN email_hash TEXT")
+        if link_cols and "token_id" not in link_cols:
+            self.conn.execute("ALTER TABLE oauth_links ADD COLUMN token_id TEXT")
         if hold_cols:
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS trial_reservations_token ON trial_reservations(token_id, created_at)"

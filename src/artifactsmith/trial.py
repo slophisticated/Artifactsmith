@@ -118,9 +118,10 @@ def cap_micros() -> int:
 
 
 def day_spend_micros(conn: Any, day: str) -> int:
+    """Shared UTC-day spend. The directory review token is stored and settled, then left out."""
     row = conn.execute(
         "SELECT COALESCE(SUM(CASE WHEN actual_micros IS NULL THEN reserved_micros ELSE actual_micros END), 0) AS n "
-        "FROM trial_reservations WHERE day=?",
+        "FROM trial_reservations WHERE day=? AND IFNULL(token_id, '') != 'tok_oauth_demo'",
         (day,),
     ).fetchone()
     return int(row["n"] if row else 0)
@@ -260,7 +261,7 @@ def link_url(raw: str) -> str:
     return f"{base}/trial/verify?code={quote(raw)}"
 
 
-def send_magic_link(to: str, url: str) -> None:
+def send_magic_link(to: str, url: str, *, intro: str | None = None) -> None:
     host = CFG.smtp_host.strip()
     sender = CFG.smtp_from.strip()
     if not host or not sender:
@@ -272,11 +273,8 @@ def send_magic_link(to: str, url: str) -> None:
     message["Subject"] = "Your ArtifactSmith sign-in link"
     message["Date"] = formatdate(localtime=False)
     message["Message-ID"] = make_msgid(domain=_mail_domain(sender))
-    message.set_content(
-        "Open this link to finish signing up. It works once.\n\n"
-        + url
-        + "\n\nIf you did not ask for this, ignore it.\n"
-    )
+    lead = intro or "Open this link to finish signing up. It works once."
+    message.set_content(lead + "\n\n" + url + "\n\nIf you did not ask for this, ignore it.\n")
     try:
         with smtplib.SMTP(host, int(CFG.smtp_port), timeout=20) as smtp:
             if CFG.smtp_tls:
@@ -438,5 +436,11 @@ def purge_idle_trials(db: Any, store: Any, *, now: float | None = None) -> int:
             db.exec("DELETE FROM artifacts WHERE id=?", art["id"])
         db.exec("UPDATE tokens SET revoked_at=? WHERE id=?", stamp, token["id"])
         db.exec("DELETE FROM web_sessions WHERE token_id=?", token["id"])
+        from .oauth_grants import drop_for_token
+
+        drop_for_token(db, str(token["id"]))
         removed += 1
+    from .oauth_store import purge_expired
+
+    purge_expired(db, stamp)
     return removed
