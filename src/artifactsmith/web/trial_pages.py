@@ -186,6 +186,13 @@ def _form(csrf: str, message: str = "") -> str:
         "and gets back a web page, PDF, Word doc or spreadsheet.</p>"
         f'<p>Source and install: <a href="{REPO}">github.com/vrijsinghani/Artifactsmith</a> '
         "(Open source, MIT)</p>"
+        "<p>Examples, no sign-up: "
+        '<a href="https://artifactsmith.neuralami.ai/s/b5svuvbu2urtqaxg/">comparison page</a>'
+        " · "
+        '<a href="https://artifactsmith.neuralami.ai/s/7d3f7f6x5bnk4wz5/">status page with a chart</a>'
+        " · "
+        '<a href="https://artifactsmith.neuralami.ai/s/i9m5kwwgik22djf5/">PDF checklist</a>'
+        "</p>"
         "<p>I run a copy here so you can see it work first. Enter an email and you get a token "
         "for Claude Desktop, Cursor or any MCP client. It runs on my server and Claude Haiku 5.5, "
         f"capped at {builds} builds. Shared links last {int(SHARE_DAYS)} days.</p>"
