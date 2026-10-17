@@ -130,7 +130,9 @@ def reserve(conn: Any, job_id: str, when: float, token_id: str) -> None:
     """Hold worst-case cost for this UTC day. Caller must already be inside a write transaction.
 
     ``token_id`` is what the lifetime and hourly limits count. Deleting an artifact
-    removes the job row and must not remove this one.
+    removes the job row and must not remove this one. ``counts_build`` stays 1 until
+    a needs_input outcome waives it, and only while that token still has free
+    needs_input jobs left. The row still counts for spend.
     """
     day = utc_day(when)
     worst = worst_case_micros()
@@ -142,6 +144,34 @@ def reserve(conn: Any, job_id: str, when: float, token_id: str) -> None:
         "VALUES (?,?,?,?,NULL,NULL,?)",
         (job_id, token_id, day, worst, when),
     )
+
+
+COUNTED_BUILDS_SQL = "SELECT COUNT(*) AS n FROM trial_reservations WHERE token_id=? AND counts_build=1"
+_WAIVED_SQL = "SELECT COUNT(*) AS n FROM trial_reservations WHERE token_id=? AND counts_build=0"
+
+
+def waive_build(conn: Any, job_id: str) -> None:
+    """A needs_input job does not use a hosted build until the token's free count is used.
+
+    The caller already holds the write transaction. The token comes from this reservation.
+    ``counts_build`` becomes 0 only when that token has fewer than
+    ``AM_TRIAL_FREE_NEEDS_INPUT`` waived rows. Otherwise it stays 1. The reservation
+    stays either way, so the daily spend total and the hourly limit still include it.
+    """
+    row = conn.execute("SELECT token_id FROM trial_reservations WHERE job_id=?", (job_id,)).fetchone()
+    if row is None or row["token_id"] is None:
+        return
+    waived = conn.execute(_WAIVED_SQL, (row["token_id"],)).fetchone()
+    if int(waived["n"] if waived else 0) >= int(CFG.trial_free_needs_input):
+        return
+    conn.execute("UPDATE trial_reservations SET counts_build=0 WHERE job_id=?", (job_id,))
+
+
+def free_retries_left(db: Any, token_id: str) -> int:
+    """How many more needs_input jobs for this token will not use a build."""
+    row = db.one(_WAIVED_SQL, token_id)
+    waived = int(row["n"]) if row else 0
+    return max(0, int(CFG.trial_free_needs_input) - waived)
 
 
 def settle(db: Any, job_id: str, usage: list[tuple[int, int, bool]]) -> None:

@@ -17,7 +17,7 @@ from tests.unit.test_service import FakeStore, _mark_done, _principal
 
 import artifactsmith.server as server
 from artifactsmith import llm, trial
-from artifactsmith.builder import BuildResult
+from artifactsmith.builder import BuildResult, NeedsInput
 from artifactsmith.config import CFG
 from artifactsmith.service import AMError, Service
 from artifactsmith.store import Store
@@ -674,6 +674,267 @@ async def test_failed_model_call_settles_the_tokens_it_spent(svc, trial_on, monk
     assert svc.db.one("SELECT actual_micros FROM trial_reservations WHERE job_id=?", created["job_id"])[
         "actual_micros"
     ] == trial.micros_for(100, 50)
+    failed = await svc.status(_trial(), job_id=created["job_id"], wait=0)
+    assert failed["status"] == "failed"
+    assert failed["builds_remaining"] == 19
+
+
+async def _ok_page(**_kw: object) -> BuildResult:
+    return BuildResult(
+        files={"index.html": b"<html><body>ok</body></html>"},
+        primary="index.html",
+        assumptions=["none"],
+        summary="built",
+        model="gpt-test",
+    )
+
+
+def _record_needs_input(message: str):
+    async def need(**_kw: object) -> BuildResult:
+        sink = llm._usage.get()
+        assert sink is not None
+        sink.append((120, 30, True))
+        raise NeedsInput(message)
+
+    return need
+
+
+@pytest.mark.asyncio
+async def test_needs_input_does_not_use_a_build(svc, trial_on, monkeypatch):
+    _token(svc)
+    _token(svc, "tok_hour_need")
+    monkeypatch.setattr("artifactsmith.service.builder.run_build", _record_needs_input("comparison figures"))
+    created = _create(svc, _trial(), "missing")
+    assert created["builds_remaining"] == 19
+    await svc._run_job(created["job_id"])
+    asked = await svc.status(_trial(), job_id=created["job_id"], wait=0)
+    assert asked["status"] == "needs_input"
+    assert asked["builds_remaining"] == 20
+    assert asked["free_retries_left"] == 4
+    assert "preview_url" not in asked
+    row = svc.db.one("SELECT counts_build, actual_micros FROM trial_reservations WHERE job_id=?", created["job_id"])
+    assert row["counts_build"] == 0
+    assert row["actual_micros"] == trial.micros_for(120, 30)
+
+    monkeypatch.setattr(CFG, "trial_builds_per_hour", 1)
+    other = _trial(pid="tok_hour_need")
+    hourly = _create(svc, other, "hour-need")
+    await svc._run_job(hourly["job_id"])
+    hour_status = await svc.status(other, job_id=hourly["job_id"], wait=0)
+    assert hour_status["status"] == "needs_input"
+    assert hour_status["builds_remaining"] == 20
+    assert hour_status["free_retries_left"] == 4
+    with pytest.raises(AMError, match="quota: 1 builds/hour reached"):
+        _create(svc, other, "hour-again")
+
+    monkeypatch.setattr(CFG, "trial_builds_per_hour", 10)
+    monkeypatch.setattr("artifactsmith.service.builder.run_build", _ok_page)
+    done = _create(svc, _trial(), "done-page")
+    await svc._run_job(done["job_id"])
+    finished = await svc.status(_trial(), job_id=done["job_id"], wait=0)
+    assert finished["status"] == "done"
+    assert finished["builds_remaining"] == 19
+    assert "free_retries_left" not in finished
+
+    async def boom(**_kw: object) -> BuildResult:
+        raise RuntimeError("renderer exploded")
+
+    monkeypatch.setattr("artifactsmith.service.builder.run_build", boom)
+    broke = _create(svc, _trial(), "broke")
+    await svc._run_job(broke["job_id"])
+    failed = await svc.status(_trial(), job_id=broke["job_id"], wait=0)
+    assert failed["status"] == "failed"
+    assert failed["builds_remaining"] == 18
+    assert "free_retries_left" not in failed
+
+
+@pytest.mark.asyncio
+async def test_needs_input_spend_still_counts_toward_the_daily_cap(svc, trial_on, monkeypatch):
+    _token(svc)
+    monkeypatch.setattr(CFG, "trial_daily_usd", "0.10")
+
+    async def costly(**_kw: object) -> BuildResult:
+        sink = llm._usage.get()
+        assert sink is not None
+        sink.append((10_000_000, 10_000_000, True))
+        raise NeedsInput("the comparison numbers")
+
+    monkeypatch.setattr("artifactsmith.service.builder.run_build", costly)
+    created = _create(svc, _trial(), "costly")
+    await svc._run_job(created["job_id"])
+    status = await svc.status(_trial(), job_id=created["job_id"], wait=0)
+    assert status["status"] == "needs_input"
+    assert status["builds_remaining"] == 20
+    assert (
+        svc.db.one("SELECT actual_micros FROM trial_reservations WHERE job_id=?", created["job_id"])["actual_micros"]
+        == 84_000
+    )
+    usage = svc.db.one("SELECT input_tokens, output_tokens FROM trial_usage WHERE job_id=?", created["job_id"])
+    assert usage == {"input_tokens": 10_000_000, "output_tokens": 10_000_000}
+    with pytest.raises(AMError, match="hosted copy hit today's limit"):
+        _create(svc, _trial(), "blocked")
+    assert svc._builds_remaining(_trial()) == 20
+    assert status["free_retries_left"] == 4
+
+
+@pytest.mark.asyncio
+async def test_five_needs_input_are_free_and_the_sixth_counts(svc, trial_on, monkeypatch):
+    _token(svc)
+    _token(svc, "tok_other")
+    monkeypatch.setattr(CFG, "trial_free_needs_input", 5)
+    monkeypatch.setattr("artifactsmith.service.builder.run_build", _record_needs_input("the figure"))
+    for n in range(5):
+        created = _create(svc, _trial(), f"free-{n}")
+        assert "free_retries_left" not in created
+        await svc._run_job(created["job_id"])
+        status = await svc.status(_trial(), job_id=created["job_id"], wait=0)
+        assert status["status"] == "needs_input"
+        assert status["builds_remaining"] == 20
+        assert status["free_retries_left"] == 4 - n
+    sixth = _create(svc, _trial(), "sixth")
+    await svc._run_job(sixth["job_id"])
+    charged = await svc.status(_trial(), job_id=sixth["job_id"], wait=0)
+    assert charged["status"] == "needs_input"
+    assert charged["builds_remaining"] == 19
+    assert charged["free_retries_left"] == 0
+    flags = {
+        row["job_id"]: row["counts_build"]
+        for row in svc.db.all("SELECT job_id, counts_build FROM trial_reservations WHERE token_id=?", "tok_trial")
+    }
+    assert sum(1 for flag in flags.values() if flag == 0) == 5
+    assert flags[sixth["job_id"]] == 1
+    other = _trial(pid="tok_other")
+    created = _create(svc, other, "other-free")
+    await svc._run_job(created["job_id"])
+    other_status = await svc.status(other, job_id=created["job_id"], wait=0)
+    assert other_status["builds_remaining"] == 20
+    assert other_status["free_retries_left"] == 4
+
+
+@pytest.mark.asyncio
+async def test_needs_input_loop_stops_after_the_free_ones_and_the_build_cap(svc, trial_on, monkeypatch):
+    _token(svc)
+    monkeypatch.setattr(CFG, "trial_free_needs_input", 5)
+    monkeypatch.setattr(CFG, "trial_build_limit", 20)
+    monkeypatch.setattr(CFG, "trial_builds_per_hour", 10)
+    clock = {"t": 1_700_000_000.0}
+    monkeypatch.setattr("artifactsmith.service.now", lambda: clock["t"])
+    monkeypatch.setattr("artifactsmith.service.builder.run_build", _record_needs_input("the figure"))
+
+    made = 0
+    for hour in range(3):
+        for slot in range(10):
+            if made == 25:
+                break
+            created = _create(svc, _trial(), f"h{hour}-{slot}")
+            await svc._run_job(created["job_id"])
+            status = await svc.status(_trial(), job_id=created["job_id"], wait=0)
+            assert status["status"] == "needs_input"
+            made += 1
+        if made < 25:
+            with pytest.raises(AMError, match="quota: 10 builds/hour reached"):
+                _create(svc, _trial(), f"h{hour}-over")
+            clock["t"] += 3600
+    assert made == 25
+    with pytest.raises(AMError, match="you've used the 20 hosted builds"):
+        _create(svc, _trial(), "over-life")
+    assert svc.db.one("SELECT COUNT(*) AS n FROM jobs")["n"] == 25
+    clock["t"] += 86400
+    with pytest.raises(AMError, match="you've used the 20 hosted builds"):
+        _create(svc, _trial(), "next-day")
+    assert svc.db.one("SELECT COUNT(*) AS n FROM jobs")["n"] == 25
+
+
+@pytest.mark.asyncio
+async def test_zero_free_needs_input_counts_every_build(svc, trial_on, monkeypatch):
+    _token(svc)
+    monkeypatch.setattr(CFG, "trial_free_needs_input", 0)
+    monkeypatch.setattr("artifactsmith.service.builder.run_build", _record_needs_input("the figure"))
+    created = _create(svc, _trial(), "counted")
+    assert created["builds_remaining"] == 19
+    await svc._run_job(created["job_id"])
+    status = await svc.status(_trial(), job_id=created["job_id"], wait=0)
+    assert status["status"] == "needs_input"
+    assert status["builds_remaining"] == 19
+    assert status["free_retries_left"] == 0
+    row = svc.db.one("SELECT counts_build FROM trial_reservations WHERE job_id=?", created["job_id"])
+    assert row["counts_build"] == 1
+
+
+def _reservations_before_counts_build(path, rows):
+    import sqlite3
+
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE jobs ("
+        "id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL, version INTEGER NOT NULL, "
+        "client TEXT NOT NULL, status TEXT NOT NULL, created_at REAL NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE trial_reservations ("
+        "job_id TEXT PRIMARY KEY, token_id TEXT, day TEXT NOT NULL, "
+        "reserved_micros INTEGER NOT NULL, actual_micros INTEGER, settled_at REAL, created_at REAL)"
+    )
+    for job_id, token_id, status, created in rows:
+        conn.execute(
+            "INSERT INTO jobs (id, artifact_id, version, client, status, created_at) VALUES (?,?,?,?,?,?)",
+            (job_id, "a", 1, token_id or "t", status, created),
+        )
+        conn.execute(
+            "INSERT INTO trial_reservations (job_id, token_id, day, reserved_micros, created_at) VALUES (?,?,?,?,?)",
+            (job_id, token_id, "2026-10-17", 1, created),
+        )
+    conn.commit()
+    conn.close()
+
+
+def test_needs_input_migration_waives_the_oldest_rows_up_to_the_cap(tmp_path, monkeypatch):
+    from artifactsmith.db import DB
+
+    monkeypatch.setattr(CFG, "trial_free_needs_input", 2)
+    path = tmp_path / "capped.sqlite"
+    _reservations_before_counts_build(
+        path,
+        [
+            ("a-new", "tok_a", "needs_input", 4),
+            ("a-mid", "tok_a", "needs_input", 3),
+            ("a-old", "tok_a", "needs_input", 1),
+            ("a-next", "tok_a", "needs_input", 2),
+            ("a-fail", "tok_a", "failed", 0),
+            ("b-only", "tok_b", "needs_input", 9),
+            ("n-new", None, "needs_input", 3),
+            ("n-old", None, "needs_input", 1),
+            ("n-mid", None, "needs_input", 2),
+        ],
+    )
+    db = DB(path)
+    flags = {
+        row["job_id"]: row["counts_build"] for row in db.all("SELECT job_id, counts_build FROM trial_reservations")
+    }
+    assert flags == {
+        "a-old": 0,
+        "a-next": 0,
+        "a-mid": 1,
+        "a-new": 1,
+        "a-fail": 1,
+        "b-only": 0,
+        "n-old": 0,
+        "n-mid": 0,
+        "n-new": 1,
+    }
+    db.close()
+
+
+def test_needs_input_migration_waives_nothing_when_the_cap_is_zero(tmp_path, monkeypatch):
+    from artifactsmith.db import DB
+
+    monkeypatch.setattr(CFG, "trial_free_needs_input", 0)
+    path = tmp_path / "none.sqlite"
+    _reservations_before_counts_build(path, [("need", "tok_a", "needs_input", 1), ("fail", "tok_a", "failed", 2)])
+    db = DB(path)
+    flags = [row["counts_build"] for row in db.all("SELECT counts_build FROM trial_reservations ORDER BY job_id")]
+    assert flags == [1, 1]
+    db.close()
 
 
 def test_old_reservations_gain_token_columns(tmp_path):
@@ -684,15 +945,31 @@ def test_old_reservations_gain_token_columns(tmp_path):
     path = tmp_path / "old.sqlite"
     conn = sqlite3.connect(path)
     conn.execute(
+        "CREATE TABLE jobs ("
+        "id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL, version INTEGER NOT NULL, "
+        "client TEXT NOT NULL, status TEXT NOT NULL, progress TEXT, error TEXT, "
+        "created_at REAL NOT NULL, started_at REAL, finished_at REAL)"
+    )
+    conn.execute(
+        "INSERT INTO jobs (id, artifact_id, version, client, status, created_at) VALUES "
+        "('job_need', 'a', 1, 't', 'needs_input', 1), ('job_fail', 'a', 1, 't', 'failed', 1)"
+    )
+    conn.execute(
         "CREATE TABLE trial_reservations ("
         "job_id TEXT PRIMARY KEY, day TEXT NOT NULL, reserved_micros INTEGER NOT NULL, "
         "actual_micros INTEGER, settled_at REAL)"
+    )
+    conn.execute(
+        "INSERT INTO trial_reservations (job_id, day, reserved_micros) VALUES "
+        "('job_need', '2026-10-17', 1), ('job_fail', '2026-10-17', 1)"
     )
     conn.commit()
     conn.close()
     db = DB(path)
     cols = {str(row[1]) for row in db.conn.execute("PRAGMA table_info(trial_reservations)")}
-    assert {"token_id", "created_at"} <= cols
+    assert {"token_id", "created_at", "counts_build"} <= cols
+    assert db.one("SELECT counts_build FROM trial_reservations WHERE job_id=?", "job_need")["counts_build"] == 0
+    assert db.one("SELECT counts_build FROM trial_reservations WHERE job_id=?", "job_fail")["counts_build"] == 1
     db.close()
 
 
@@ -949,6 +1226,7 @@ def test_magic_link_shows_the_token_once(trial_http, svc):
     page = _verify(client, box["url"])
     assert page.status_code == 200
     assert page.headers["cache-control"] == "no-store"
+    assert "Tell the agent to pass its notes as source_content." in page.text
     found = re.search(r'value="(asmb_[^"]+)"', page.text)
     assert found
     raw = found.group(1)
@@ -980,6 +1258,7 @@ def test_magic_link_shows_the_token_once(trial_http, svc):
     assert "Try it before you install" in landing
     assert "Open source, MIT" in landing
     assert f"capped at {int(CFG.trial_build_limit)} builds" in landing
+    assert "Tell the agent to pass its notes as source_content." in landing
     assert "free builds" not in landing
     assert "free trial" not in landing
     assert "no card" not in landing
@@ -1051,6 +1330,7 @@ def test_unverified_signup_shows_the_token_and_keeps_the_limits(trial_http, svc,
     assert posted.status_code == 200
     assert posted.headers["cache-control"] == "no-store"
     assert "Your token" in posted.text
+    assert "Tell the agent to pass its notes as source_content." in posted.text
     assert "sign-up link is on its way" not in posted.text
     assert box == {}
     assert svc.db.one("SELECT COUNT(*) AS n FROM trial_links")["n"] == 0
