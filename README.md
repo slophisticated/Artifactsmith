@@ -112,9 +112,11 @@ Host ports bind to `127.0.0.1`:
 
 ## Connect a client
 
-The MCP endpoint on this machine is `http://127.0.0.1:8780/mcp`. Send the token from `artifactsmith token add` as `Authorization: Bearer YOUR_TOKEN`. The header value starts with `Bearer `.
+Claude.ai: Customize → Connectors → + Add → Add custom connector. Paste https://artifactsmith.neuralami.ai/mcp, select Connect, and sign in with your email. The connector then works in the Claude desktop and phone apps too. Free plans allow one custom connector. On Team and Enterprise plans an owner adds it first.
 
-Claude.ai custom connectors sign in with OAuth. ChatGPT personal plans cannot add a custom MCP server. A ChatGPT Business, Enterprise, or Edu admin can add it. Claude Desktop, Claude Code, and Cursor keep using the Authorization header.
+[github.com/vrijsinghani/Artifactsmith](https://github.com/vrijsinghani/Artifactsmith) is the copy you run yourself. Claude Desktop, Claude Code, and Cursor use a token there. The MCP endpoint on this machine is `http://127.0.0.1:8780/mcp`. Send the token from `artifactsmith token add` as `Authorization: Bearer YOUR_TOKEN`. The header value starts with `Bearer `.
+
+ChatGPT Free, Go, and Plus cannot add a custom MCP server. Pro can add one with read and fetch access only, so it cannot build pages. A ChatGPT Business, Enterprise, or Edu admin can add it on the web; it signs in with OAuth.
 
 Claude Desktop stores the config in `claude_desktop_config.json` (Settings → Developer → Edit Config). The snippet runs `npx` and `mcp-remote`, which needs Node.js. Restart Claude Desktop after saving.
 
