@@ -7,6 +7,7 @@ Version numbers follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 ### Added
 
+- `artifactsmith stdio` serves the same MCP tools on stdin and stdout for a local client such as Claude Desktop or a Glama inspector. It does not listen, and it does not accept HTTP without a bearer token. `glama.json` names the maintainer. Store and model calls on stdio return an MCP error.
 - `/trial` includes an Open Graph and Twitter card when `AM_API_URL` is a public `https` origin. The image is `GET /static/og-trial.png` with no token. A loopback or private origin omits the tags. The page stays `noindex`.
 - `AM_TRIAL_SIGNUPS_PER_DAY` (default 300). Once that many trials are minted today, `/trial` says `today's trial spots are taken, back at 00:00 UTC`.
 - `AM_TRIAL_EMAIL_VERIFY` (default `true`). Set it to `false` to show the trial token on submit, send no mail, and store the sign-up as unverified. Email, disposable-domain, per-address, and per-IP checks stay in place.
